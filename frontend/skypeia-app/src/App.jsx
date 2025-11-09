@@ -6,6 +6,14 @@ import { ConnectedIcon, DisconnectedIcon } from "./components/ConnectionIcons";
 import Ribbons from "./components/Ribbons";
 import { SiBluesky } from "react-icons/si";
 
+/*
+  SINGLE CHANGEABLE BASE URL — update this if your API host changes.
+  Uses HTTPS for fetch and WSS for websockets automatically.
+*/
+const API_BASE = "https://skypiea1.onrender.com";
+const WS_SCHEME = API_BASE.startsWith("https://") ? "wss" : "ws";
+const WS_BASE = `${WS_SCHEME}://${new URL(API_BASE).host}`;
+
 const RECEIVE_OPTION = { CODE: "code", QR: "qr" };
 const HOST_STEPS = { CONFIGURE: "configure", DISPLAY_CODE: "display_code" };
 const RECEIVE_STEPS = { SETUP: "setup", CONNECT: "connect", SEND_FILE: "send_file" };
@@ -250,7 +258,7 @@ export default function App() {
   // helpers
   async function createFolderOnServer(name) {
     try {
-      const res = await fetch("http://localhost:3000/folders", {
+      const res = await fetch(`${API_BASE}/folders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -279,8 +287,8 @@ export default function App() {
     try {
       const folderToUse = saveToDownloads ? "" : dir;
       const url = folderToUse
-        ? `http://localhost:3000/connection-info?dir=${encodeURIComponent(folderToUse)}&note=${encodeURIComponent(note)}`
-        : `http://localhost:3000/connection-info?note=${encodeURIComponent(note)}`;
+        ? `${API_BASE}/connection-info?dir=${encodeURIComponent(folderToUse)}&note=${encodeURIComponent(note)}`
+        : `${API_BASE}/connection-info?note=${encodeURIComponent(note)}`;
 
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
@@ -292,12 +300,17 @@ export default function App() {
       if (saveToDownloads) {
         try {
           const { ip, port, token } = j.connectionData;
-          const hws = new WebSocket(`ws://${ip}:${port}/ws`);
+          // Use central WSS endpoint (WS_BASE) for browsers when hosted
+          const hws = new WebSocket(`${WS_BASE}/ws`);
           hws.binaryType = "arraybuffer";
           hostWsRef.current = hws;
 
           hws.onopen = () => {
-            hws.send(JSON.stringify({ type: "host-register", token }));
+            try {
+              hws.send(JSON.stringify({ type: "host-register", token }));
+            } catch (err) {
+              console.error("host register send error:", err);
+            }
             logMsg("Receiver websocket registered for direct download");
           };
 
@@ -394,7 +407,7 @@ export default function App() {
     setResolved(null);
     setProgress("");
     try {
-      const res = await fetch(`http://localhost:3000/resolve?code=${encodeURIComponent(codeInput.trim())}`);
+      const res = await fetch(`${API_BASE}/resolve?code=${encodeURIComponent(codeInput.trim())}`);
       if (!res.ok) throw new Error("Code not found.");
       const j = await res.json();
       const persona = profileForKey(j.connectionData.code || j.connectionData.token);
@@ -419,7 +432,7 @@ export default function App() {
     setIsLoading(true);
     setProgress("0%");
     try {
-      const ws = new WebSocket(`ws://${resolved.ip}:${resolved.port}/ws`);
+      const ws = new WebSocket(`${WS_BASE}/ws`);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -531,7 +544,7 @@ export default function App() {
   useEffect(() => {
     async function loadFolders() {
       try {
-        const res = await fetch("http://localhost:3000/folders");
+        const res = await fetch(`${API_BASE}/folders`);
         if (res.ok) {
           const j = await res.json();
           setAvailableFolders(j.folders || []);
