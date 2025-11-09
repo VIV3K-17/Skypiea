@@ -1,0 +1,411 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Skypiea - Mobile Sender</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    
+    <style>
+        /* BASE STYLES */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background-color: #D2F8DC; /* UPDATED: Specified background color */
+            color: #2E4F21; /* UPDATED: Specified text color */
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* LAYOUT CONTAINER */
+        .container {
+            width: 90%;
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 20px; /* Reduced top padding for a sleeker look */
+        }
+
+        /* NEW SKYPIEA HEADER / NAVIGATION */
+        .skypiea-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            margin-bottom: 50px;
+            border-bottom: 1px solid rgba(46, 79, 33, 0.2); /* Subtle separator */
+        }
+
+        .skypiea-logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2E4F21;
+        }
+
+        .skypiea-nav-links a {
+            font-size: 16px;
+            color: #2E4F21;
+            text-decoration: none;
+            padding: 8px 15px;
+            border: 1px solid #2E4F21;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .skypiea-nav-links a:hover {
+            background-color: #2E4F21;
+            color: #D2F8DC;
+        }
+        
+        /* HERO SECTION */
+        .hero-section {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 40px;
+        }
+        
+        .left-content {
+            flex: 1;
+            padding-right: 20px;
+        }
+
+        /* Main Headline (4-digit code position) */
+        .hero-headline {
+            font-size: 64px;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            color: #2E4F21;
+        }
+        
+        /* Sub-text Area */
+        .hero-subtext {
+            font-size: 18px;
+            margin-bottom: 30px;
+            color: #2E4F21; /* Uses the specified paragraph color */
+        }
+
+        /* QR Code / Globe Position */
+        .right-content {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            max-width: 500px; /* Sizing the globe/QR area */
+            aspect-ratio: 1 / 1;
+        }
+        
+        /* QR Code Container Styling */
+        #qrcode-container {
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            display: none; /* Initially hidden */
+        }
+        
+        /* SKyPIEA COMPONENT STYLES */
+        
+        /* Hide or style the default inputs to match the minimal design */
+        #connJson, #ip, #port, #code, #token, hr {
+            display: none !important; 
+        }
+        
+        /* File input style */
+        input[type="file"] {
+            border: 1px dashed #2E4F21; /* Adapted to new primary color */
+            padding: 20px;
+            background: rgba(46, 79, 33, 0.05); /* Light tint of primary color */
+            color: #2E4F21;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: center;
+            margin-bottom: 20px;
+            width: calc(100% - 40px); /* Adjusting for padding */
+            box-sizing: border-box;
+        }
+
+        /* Connect Button Style */
+        #connectBtn {
+            background-color: #2E4F21; /* Uses the new primary color */
+            color: #D2F8DC; /* Uses the new background color for contrast */
+            font-size: 18px;
+            padding: 15px 0;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        #connectBtn:hover {
+            background-color: #4a6c47;
+        }
+
+        /* Log/Status Area */
+        #log {
+            margin-top: 20px;
+            height: 120px; 
+            overflow-y: auto;
+            border: 1px solid #b7e0c0;
+            padding: 10px;
+            white-space: pre-wrap;
+            background: #e9faee;
+            color: #2E4F21;
+            font-size: 12px;
+            border-radius: 5px;
+            display: none; 
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .hero-section {
+                flex-direction: column;
+                text-align: center;
+            }
+            .left-content {
+                padding-right: 0;
+            }
+            .hero-headline {
+                font-size: 48px;
+            }
+            .right-content {
+                max-width: 100%;
+            }
+        }
+    </style>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="skypiea-header">
+            <div class="skypiea-logo">Skypiea File Transfer</div>
+            <nav class="skypiea-nav-links">
+                <a href="#" onclick="alert('This feature is currently disabled.'); return false;">Help / About</a>
+            </nav>
+        </header>
+
+        <main class="hero-section">
+            
+            <div class="left-content">
+                <p class="hero-subtext">Transfer Connection Code:</p>
+                <div id="display-code" class="hero-headline">
+                    Waiting...
+                </div>
+                <div class="hero-subtext" id="transfer-instructions">
+                    To connect, ensure your PC is running the Skypiea receiver, then scan the QR code or enter the connection details manually below.
+                </div>
+                
+                <div id="transfer-controls">
+                    <input type="file" id="file" />
+                    <button id="connectBtn">Connect & Start Transfer</button>
+                    <textarea id="connJson" placeholder='Paste connection JSON here (from QR)'></textarea>
+                    <input id="ip" placeholder="PC IP (auto if JSON provided)"/>
+                    <input id="port" placeholder="PC Port (auto if JSON provided)"/>
+                    <input id="code" placeholder="4-digit Code (auto if JSON provided)"/>
+                    <input id="token" placeholder="token (auto if JSON provided)"/>
+                    <div id="log"></div>
+                </div>
+
+            </div>
+            
+            <div class="right-content">
+                <div id="qrcode-container">
+                    <div id="qrcode"></div>
+                    <p style="text-align:center; margin-top:10px; font-size:14px; color:#2E4F21;">Scan to Connect</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+<script>
+// =================================================================
+// 3. Skypiea Mobile Sender Logic (Original logic adapted)
+// =================================================================
+
+// UI Elements
+const logEl = document.getElementById('log');
+const codeEl = document.getElementById('code'); // Hidden
+const displayCodeEl = document.getElementById('display-code');
+const qrcodeContainerEl = document.getElementById('qrcode-container');
+const connJsonEl = document.getElementById('connJson'); // Hidden
+
+// Utility function to print logs
+function log(...args) { 
+    logEl.style.display = 'block'; // Show log when transfer starts
+    logEl.innerText += args.join(' ') + '\n'; 
+    logEl.scrollTop = logEl.scrollHeight; 
+}
+
+// Function to simulate getting a connection payload (for testing)
+function getSimulatedConnectionPayload() {
+    // NOTE: In a real app, this data would be fetched from the PC server 
+    // or manually entered by the user. For this example, we generate a mock QR value.
+    const mockIP = '192.168.1.100'; 
+    const mockPort = '3000';
+    const mockCode = Math.floor(1000 + Math.random() * 9000).toString();
+    const mockToken = cryptoRandomId();
+
+    const payload = JSON.stringify({
+        ip: mockIP,
+        port: mockPort,
+        code: mockCode,
+        token: mockToken
+    });
+
+    // Populate the hidden fields with the simulated data
+    connJsonEl.value = payload; 
+    document.getElementById('ip').value = mockIP;
+    document.getElementById('port').value = mockPort;
+    codeEl.value = mockCode;
+    document.getElementById('token').value = mockToken;
+    
+    // Update the visual elements
+    displayCodeEl.innerText = mockCode;
+    qrcodeContainerEl.style.display = 'block';
+    
+    // Check if QR code element exists and clear previous QR code before generating a new one
+    const qrcodeDiv = document.getElementById('qrcode');
+    qrcodeDiv.innerHTML = '';
+    
+    // Generate QR Code
+    new QRCode(qrcodeDiv, {
+        text: payload,
+        width: 200,
+        height: 200,
+        colorDark : "#2E4F21", // Uses the new primary color
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.H
+    });
+}
+
+// 4. Initialize the QR Code and Code Display on Load
+window.onload = getSimulatedConnectionPayload;
+
+// --- Original Skypiea Transfer Logic Below ---
+
+// Listener to process pasted JSON (for manual input fallback)
+document.getElementById('connJson').addEventListener('input', (e) => {
+    try {
+        const j = JSON.parse(e.target.value);
+        if (j.ip) document.getElementById('ip').value = j.ip;
+        if (j.port) document.getElementById('port').value = j.port;
+        if (j.code) { 
+            document.getElementById('code').value = j.code; 
+            displayCodeEl.innerText = j.code; // Update display code on manual paste
+        }
+        if (j.token) document.getElementById('token').value = j.token;
+        log('Connection info pasted successfully.');
+    } catch(_) {
+        log('Invalid JSON pasted.');
+    }
+});
+
+const chunkSize = 1024 * 512; 
+let ws = null;
+
+document.getElementById('connectBtn').addEventListener('click', async () => {
+    const ip = document.getElementById('ip').value.trim();
+    const port = document.getElementById('port').value.trim();
+    const code = document.getElementById('code').value.trim();
+    const token = document.getElementById('token').value.trim();
+    const fileInput = document.getElementById('file');
+    
+    if (!ip || !port || !code || !token) { 
+        log('Missing connection info. Refresh or check your setup.'); 
+        return; 
+    }
+    if (!fileInput.files.length) { log('Select a file to begin transfer.'); return; }
+    const file = fileInput.files[0];
+    const transferId = cryptoRandomId();
+    const wsUrl = `ws://${ip}:${port}/ws`;
+    
+    log('Connecting to', wsUrl);
+    
+    // Disable button to prevent double click
+    document.getElementById('connectBtn').disabled = true;
+    document.getElementById('connectBtn').innerText = 'Connecting...';
+    
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+        log('WS open — sending init');
+        document.getElementById('connectBtn').innerText = 'Starting Transfer...';
+        ws.send(JSON.stringify({
+            type: 'init',
+            token,
+            code,
+            transferId,
+            filename: file.name,
+            totalSize: file.size
+        }));
+    };
+
+    ws.onmessage = async (ev) => {
+        if (typeof ev.data === 'string') {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'offset') {
+                log('Server offset:', msg.offset, ' — starting upload from there.');
+                document.getElementById('connectBtn').innerText = 'Uploading...';
+                await uploadFrom(msg.offset);
+            } else if (msg.type === 'progress') {
+                const percent = ((msg.received / msg.total) * 100).toFixed(2);
+                document.getElementById('connectBtn').innerText = `Uploading... ${percent}%`;
+                log(`Progress: ${msg.received}/${msg.total} (${percent}%)`);
+            } else if (msg.type === 'complete') {
+                log('Transfer complete. Server saved to:', msg.path, 'size:', msg.size);
+                document.getElementById('connectBtn').innerText = 'Transfer Complete!';
+                document.getElementById('connectBtn').disabled = false;
+                ws.close();
+            } else if (msg.type === 'error') {
+                log('Server error:', msg.message);
+                document.getElementById('connectBtn').innerText = 'Error! Try Again.';
+                document.getElementById('connectBtn').disabled = false;
+            } else {
+                log('Server message:', msg);
+            }
+        } else {
+            // binary messages from server (none expected)
+            log('Binary message from server (ignored)');
+        }
+    };
+
+    ws.onclose = () => {
+        log('WebSocket closed');
+        document.getElementById('connectBtn').disabled = false;
+    };
+    ws.onerror = (e) => {
+        log('WebSocket error', e);
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('connectBtn').innerText = 'Connection Failed. Try Again.';
+    };
+    
+    // Helpers
+    async function uploadFrom(offset) {
+        let pos = offset;
+        while (pos < file.size) {
+            const end = Math.min(pos + chunkSize, file.size);
+            const blob = file.slice(pos, end);
+            const arr = await blob.arrayBuffer();
+            if (ws.readyState !== WebSocket.OPEN) {
+                log('Connection dropped, will reconnect and resume...');
+                document.getElementById('connectBtn').innerText = 'Disconnected. Restart.';
+                return; 
+            }
+            ws.send(arr);
+            pos = end;
+            await sleep(1);
+        }
+        ws.send(JSON.stringify({ type: 'done' }));
+        log('Upload finished client-side, sent DONE.');
+        document.getElementById('connectBtn').innerText = 'Awaiting Server Confirmation...';
+    }
+});
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+function cryptoRandomId(){ return 't-'+Math.random().toString(36).slice(2,10); }
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Dependencies
+/node_modules
+**/node_modules
+ 
+# Build Output (Frontend)
+/frontend/skypeia-app/dist
+ 
+# Runtime Data (Backend)
+/backend/uploads
+ 
+# Environment Variables / Secrets
+.env
+.env.*
+*.local
+ 
+# IDE and OS Files
+.DS_Store
+*.log
+ 
+# Project Specific Files
+project_structure.text
