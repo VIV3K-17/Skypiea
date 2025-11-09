@@ -1,12 +1,12 @@
 {
   "name": "web",
   "version": "1.0.0",
-  "description": "Web application for transfering data",
+  "description": "Web application for transferring data",
   "main": "server.js",
   "scripts": {
-  "start": "node server.js",
-  "test": "node server.js"
-}
+    "start": "node server.js",
+    "test": "node server.js"
+  },
   "author": "vivek-17",
   "license": "ISC",
   "dependencies": {
