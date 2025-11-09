@@ -26,7 +26,7 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const qrcode = require("qrcode");
-const cors = require("cors");  
+const cors = require("cors");
 const crypto = require("crypto");
 const os = require("os");
 const fs = require("fs");
@@ -38,8 +38,33 @@ const UPLOADS_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const app = express();
+
+/**
+ * CORS configuration
+ *
+ * Allow the frontend origin(s) that will call this API.
+ * Replace or add origins to `allowedOrigins` as needed.
+ *
+ * NOTE: If you prefer to allow any origin (development-only), you can set `origin: true`.
+ */
+const allowedOrigins = [
+  "http://localhost:5173",               // dev: Vite / local dev (keep if used)
+  "http://localhost:3000",               // dev: other local dev cases
+  "https://skypiea-site.onrender.com",   // your deployed frontend site (change if different)
+  "https://skypiea1.onrender.com"        // optionally allow same-origin if needed
+];
+
 app.use(cors({
-  origin: "http://localhost:5173",   // allow only your React dev server
+  origin: function(origin, callback) {
+    // allow requests with no origin like curl or server-to-server
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    } else {
+      // CORS not allowed for this origin
+      return callback(new Error("CORS policy: origin not allowed"), false);
+    }
+  },
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true
