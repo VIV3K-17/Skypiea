@@ -6,8 +6,6 @@ import { ConnectedIcon, DisconnectedIcon } from "./components/ConnectionIcons";
 import Ribbons from "./components/Ribbons";
 import { SiBluesky } from "react-icons/si";
 // near the top of App.jsx alongside your other imports
-import Header from "./Header";
-import Footer from "./Footer";
 
 /*
   SINGLE CHANGEABLE BASE URL — update this if your API host changes.
@@ -943,7 +941,7 @@ export default function App() {
 
   return (
     <div className="app-root">
-      <Header />
+      {/* <Header /> */}
       <div className="app-container">
         <header className="app-header">
           <div className="title-area">
@@ -1333,8 +1331,8 @@ export default function App() {
 
       {/* confirm modal rendered outside main layout so it overlays */}
       <ConfirmModal open={confirmOpen} title={confirmPayload.title} body={confirmPayload.body} onCancel={() => setConfirmOpen(false)} onConfirm={() => { confirmPayload.onConfirm && confirmPayload.onConfirm(); }} />
-      
-      <Footer />
+      {/* 
+      <Footer /> */}
     </div>
   );
 }
