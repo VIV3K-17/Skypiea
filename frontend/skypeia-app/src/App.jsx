@@ -23,7 +23,7 @@ const API_BASE = (() => {
   if (typeof window !== "undefined" && window.location.hostname === "localhost") {
     return "http://localhost:3000";
   }
-  return "https://skypiea-1.onrender.com";
+  return "https://skypiea-2.onrender.com";
 })();
 const WS_SCHEME = API_BASE.startsWith("https://") ? "wss" : "ws";
 const WS_BASE = `${WS_SCHEME}://${new URL(API_BASE).host}`;
