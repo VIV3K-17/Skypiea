@@ -16,15 +16,6 @@ html, body {
 
 /* === Skypiea brand additions (non-overlapping) === */
 
-/* Logo font (Forence) */
-@font-face {
-  font-family: "Forence";
-  src: url("../assets/fonts/Forence-BF675bf126258a5.otf") format("opentype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
 /* Brand header (screenshot style) */
 .sk-header {
   position: sticky;
@@ -56,7 +47,7 @@ html, body {
   box-shadow: inset 0 2px 6px rgba(255,255,255,.25);
 }
 .sk-brand__text {
-  font-family: "Forence", var(--font-display);
+  font-family: var(--font-display, system-ui);
   color: var(--color-text-primary);
   font-size: 22px;
   letter-spacing: .2px;
