@@ -424,17 +424,18 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
         <div className="copyright">© {year} Skypiea. All rights reserved.</div>
         <div className="social-icons" aria-label="Skypiea social links">
           {socials.map((s) => (
-            <a
-              key={s.url}
-              className="social"
-              href={s.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={s.label}
-              title={s.label}
-            >
-              <SocialIcon url={s.url} style={{ height: 20, width: 20 }} fgColor="#ffffff" bgColor="#111827" />
-            </a>
+            <span key={s.url} className="social" role="presentation">
+              <SocialIcon
+                url={s.url}
+                rel="noopener noreferrer"
+                target="_blank"
+                title={s.label}
+                aria-label={s.label}
+                style={{ height: 20, width: 20 }}
+                fgColor="#ffffff"
+                bgColor="#111827"
+              />
+            </span>
           ))}
         </div>
       </div>
