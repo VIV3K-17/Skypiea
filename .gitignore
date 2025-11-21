@@ -1,0 +1,108 @@
+# ========================
+# Top-level .gitignore
+# ========================
+
+# -------- Node / packages --------
+# ignore node_modules everywhere
+node_modules/
+**/node_modules/
+
+# Also ignore Vite's cache
+.vite/
+node_modules/.vite
+
+# -------- Build / distribution --------
+# frontend build outputs (Vite/CRA/Next/etc.)
+dist/
+build/
+frontend/**/dist/
+frontend/**/build/
+frontend/**/dist-ssr/
+
+# keep the prebuilt frontend assets (if needed remove these)
+# (but generally we ignore generated HTML/CSS/JS)
+# frontend/**/dist/assets/
+
+# -------- Backend runtime files & uploads --------
+# Uploaded media and server runtime files
+backend/uploads/
+backend/logs/
+backend/tmp/
+
+# -------- Environment & secrets --------
+.env
+.env.local
+.env.*.local
+*.local
+
+# -------- Logs --------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# -------- OS, editors & IDE --------
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Visual Studio Code (keep settings but ignore other files)
+.vscode/
+!.vscode/extensions.json
+
+# JetBrains
+.idea/
+
+# -------- Vercel / Netlify / CI artifacts --------
+.vercel/
+.netlify/
+.now/
+
+# -------- Misc / temp --------
+*.tgz
+*.zip
+*.tar
+*.bak
+*.tmp
+
+# -------- Large media & binaries (explicit) --------
+# common large binary extensions (movies, executables, archives)
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.exe
+*.iso
+*.7z
+*.rar
+
+# -------- Source maps and maps (if you don't want them committed) --------
+*.map
+*.js.map
+*.css.map
+
+# -------- Project-specific / generated files --------
+# frontend skypeia app local file
+frontend/skypeia-app/.local
+
+# If there are any generated shadcn components you prefer to re-generate:
+# (uncomment if you want them ignored)
+# src/components/animate-ui/
+# src/lib/utils.ts
+
+# -------- Git mirror or local repos & backups --------
+# keep local mirror clone and backups out of the main repo
+skypeia-mirror.git/
+*.zip
+skypeia-web-backup-*.zip
+
+# -------- Project metadata --------
+# Ignore the project structure helper file if it's for personal use
+project_structure.text
+
+# -------- Safety: do not ignore these by default --------
+# If you rely on particular built frontend files being checked in,
+# remove their patterns from above (e.g. frontend/**/dist/).
