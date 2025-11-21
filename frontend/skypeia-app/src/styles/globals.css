@@ -275,3 +275,97 @@ html, body {
     @apply bg-background text-foreground;
   }
 }
+
+/* Mobile responsive enhancements for global components */
+@media (max-width: 768px) {
+  .sk-header__in {
+    padding-inline: 16px;
+    height: 60px;
+  }
+  
+  .sk-brand__text {
+    font-size: 18px;
+  }
+  
+  .sk-brand__badge {
+    width: 24px;
+    height: 24px;
+  }
+  
+  .sk-actions {
+    gap: 12px;
+  }
+  
+  .sk-link {
+    font-size: 14px;
+  }
+  
+  .sk-cta {
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+  
+  .sk-type {
+    padding-inline: 16px;
+    font-size: 16px;
+  }
+  
+  .sk-footer__in {
+    padding: 24px 16px 32px;
+  }
+  
+  .sk-footer__nav {
+    gap: 24px;
+    flex-direction: column;
+  }
+  
+  .sk-footer__nav a {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sk-header__in {
+    padding-inline: 12px;
+    height: 56px;
+  }
+  
+  .sk-brand__text {
+    font-size: 16px;
+  }
+  
+  .sk-brand__badge {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .sk-actions {
+    gap: 8px;
+  }
+  
+  .sk-link {
+    font-size: 13px;
+  }
+  
+  .sk-cta {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  
+  .sk-type {
+    padding-inline: 12px;
+    font-size: 14px;
+  }
+  
+  .sk-footer__in {
+    padding: 20px 12px 24px;
+  }
+  
+  .sk-footer__social {
+    gap: 16px;
+  }
+  
+  .sk-footer__social a {
+    font-size: 20px;
+  }
+}

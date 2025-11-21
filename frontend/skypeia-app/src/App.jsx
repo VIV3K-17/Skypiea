@@ -12,6 +12,7 @@ import Features from "./components/Features";
 import Support from "./components/Support";
 import Privacy from "./components/Privacy";
 import Contact from "./components/Contact";
+import ConfettiBlast from "./components/ConfettiBlast";
 
 /*
   SINGLE CHANGEABLE BASE URL — update this if your API host changes.
@@ -326,7 +327,14 @@ export default function App() {
       .constraints-card { padding: 12px; border-radius: 8px; background: #ffffff; border: 1px solid rgba(43,70,60,0.06); margin-top: 12px; }
       .constraints-card h4 { margin: 0 0 8px 0; color: #2b463c; }
       .constraints-list { margin: 0; padding: 0; list-style: none; font-size: 13px; color: #444; }
-      .constraints-list li { display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom: 1px dashed rgba(0,0,0,0.03); }
+      .constraints-list li { 
+        display: flex; 
+        gap: 8px; 
+        align-items: flex-start; 
+        padding: 6px 0; 
+        border-bottom: 1px dashed rgba(0,0,0,0.03);
+        flex-wrap: wrap;
+      }
       .constraints-list li:last-child { border-bottom: none; }
       .constraints-key { 
         min-width: 160px; 
@@ -335,6 +343,7 @@ export default function App() {
         font-weight: 600; 
         padding: 3px 6px; 
         border-radius: 4px;
+        flex-shrink: 0;
       }
       .constraints-value { 
         color: #444; 
@@ -342,6 +351,27 @@ export default function App() {
         font-weight: 500; 
         padding: 3px 6px; 
         border-radius: 4px;
+        flex: 1;
+      }
+      
+      @media (max-width: 768px) {
+        .constraints-list li {
+          flex-direction: column !important;
+          gap: 4px !important;
+          align-items: stretch !important;
+          padding: 8px 0 !important;
+        }
+        .constraints-key {
+          min-width: auto !important;
+          width: 100% !important;
+          text-align: center !important;
+          font-size: 12px !important;
+        }
+        .constraints-value {
+          width: 100% !important;
+          text-align: center !important;
+          font-size: 12px !important;
+        }
       }
 
       .log-card { margin-top: 12px; padding: 12px; border-radius: 8px; background: #fff; border: 1px solid rgba(43,70,60,0.06); }
@@ -432,7 +462,7 @@ export default function App() {
   const [log, setLog] = useState("");
   const [progress, setProgress] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [, setError] = useState(null);
+  const [error, setError] = useState(null);
   const [receiveOption, setReceiveOption] = useState(RECEIVE_OPTION.CODE);
   const [openScanner, setOpenScanner] = useState(false);
   const [scannedText, setScannedText] = useState("");
@@ -446,14 +476,19 @@ export default function App() {
   const resumeResolveRef = useRef(null);
   const transferIdRef = useRef(null);
   const hostTransferIdRef = useRef(null);
+  const connectionTimeoutRef = useRef(null);
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState(null);
 
   const [showTechDetails, setShowTechDetails] = useState(false);
 
   // confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmPayload, setConfirmPayload] = useState({ title: "", body: "", onConfirm: null });
+
+  // confetti blast state
+  const [showConfetti, setShowConfetti] = useState(false);
 
   // permission denied retry state
 
@@ -523,8 +558,42 @@ export default function App() {
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const j = await res.json();
       const persona = profileForKey(j.connectionData.code || j.connectionData.token);
-      setConnection({ ...j.connectionData, qrDataUrl: j.qrDataUrl, generatedAt: Date.now(), persona });
+      const generatedAt = Date.now();
+      setConnection({ ...j.connectionData, qrDataUrl: j.qrDataUrl, generatedAt, persona });
       logMsg("Receive ready. Code:", j.connectionData.code);
+      
+      // Start 5-minute countdown timer
+      setTimeRemaining(300); // 5 minutes in seconds
+      const countdownInterval = setInterval(() => {
+        setTimeRemaining(prev => {
+          if (prev <= 1) {
+            clearInterval(countdownInterval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      
+      // Set 5-minute timeout to abort connection
+      connectionTimeoutRef.current = setTimeout(() => {
+        clearInterval(countdownInterval);
+        setTimeRemaining(null);
+        setConnection(null);
+        setProgress("");
+        
+        // Close websocket if open
+        if (hostWsRef.current && hostWsRef.current.readyState === WebSocket.OPEN) {
+          try {
+            hostWsRef.current.close();
+          } catch (e) {
+            console.error("Error closing expired connection:", e);
+          }
+          hostWsRef.current = null;
+        }
+        
+        logMsg("Connection expired after 5 minutes");
+        setError("Connection code expired after 5 minutes. Please generate a new code.");
+      }, 5 * 60 * 1000); // 5 minutes
 
       if (saveToDownloads) {
         try {
@@ -553,6 +622,13 @@ export default function App() {
                 return;
               }
               if (m.type === "start") {
+                // Clear timeout since connection is established
+                if (connectionTimeoutRef.current) {
+                  clearTimeout(connectionTimeoutRef.current);
+                  connectionTimeoutRef.current = null;
+                }
+                setTimeRemaining(null);
+                
                 hostChunksRef.current.chunks = [];
                 hostChunksRef.current.received = 0;
                 hostChunksRef.current.total = m.totalSize || 0;
@@ -570,6 +646,7 @@ export default function App() {
                 a.remove();
                 URL.revokeObjectURL(url);
                 setProgress("Done");
+                setShowConfetti(true); // Trigger confetti blast on successful download
                 logMsg("Download finished:", a.download);
                 hostChunksRef.current.chunks = [];
               } else if (m.type === "error") {
@@ -640,7 +717,19 @@ export default function App() {
     setProgress("");
     try {
       const res = await fetch(`${API_BASE}/resolve?code=${encodeURIComponent(trimmedCode)}`);
-      if (!res.ok) throw new Error("Code not found.");
+      if (!res.ok) {
+        if (res.status === 404) {
+          // Check if code format looks correct
+          const codePattern = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/i;
+          if (!codePattern.test(trimmedCode)) {
+            throw new Error(`Invalid code format. Expected format: ABCD-1234 (got: "${trimmedCode}")`);
+          } else {
+            throw new Error(`Code "${trimmedCode}" not found. Please check if:\n• The code was typed correctly\n• The receiver is still online\n• The code hasn't expired (5-minute limit)`);
+          }
+        } else {
+          throw new Error(`Server error (${res.status}). Please try again.`);
+        }
+      }
       const j = await res.json();
       const persona = profileForKey(j.connectionData.code || j.connectionData.token);
       setResolved({ ...j.connectionData, persona });
@@ -731,6 +820,7 @@ export default function App() {
             logMsg("Transfer complete!");
             setProgress("Done!");
             setIsTransmitting(false);
+            setShowConfetti(true); // Trigger confetti blast on successful completion
             ws.close();
           } else if (msg.type === "paused") {
             pausedRef.current = true;
@@ -799,6 +889,12 @@ export default function App() {
         if (hostWsRef.current?.readyState === WebSocket.OPEN) hostWsRef.current.close();
       } catch (e) {
         console.error("Error closing hostWsRef on unmount:", e);
+      }
+      
+      // Clear connection timeout
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
       }
     };
   }, []);
@@ -1062,6 +1158,13 @@ export default function App() {
     setConnection(null);
     setHostStep(HOST_STEPS.CONFIGURE);
     setProgress("");
+    setTimeRemaining(null);
+    
+    // Clear any active timeout
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
   };
 
   let progressNumber = 0;
@@ -1248,6 +1351,22 @@ export default function App() {
                       </button>
                     </div>
 
+                    {error && (
+                      <div className="error-message" style={{
+                        marginTop: '12px',
+                        padding: '10px',
+                        backgroundColor: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        borderRadius: '8px',
+                        color: '#dc2626',
+                        fontSize: '13px',
+                        lineHeight: '1.4',
+                        whiteSpace: 'pre-line'
+                      }}>
+                        ⚠️ {error}
+                      </div>
+                    )}
+
                     {connection && hostStep === HOST_STEPS.DISPLAY_CODE && (
                       <div className="connection-box" style={{ marginTop: 12 }}>
                         <div className="code-large">{connection.code}</div>
@@ -1258,6 +1377,15 @@ export default function App() {
                           </p>
                           {connection.note && <p className="note">Note: {connection.note}</p>}
                           <p className="time">Created: {new Date(connection.generatedAt || Date.now()).toLocaleTimeString()}</p>
+                          {timeRemaining !== null && (
+                            <p className="countdown" style={{
+                              color: timeRemaining < 60 ? '#dc2626' : '#2b463c',
+                              fontWeight: 600,
+                              fontSize: '13px'
+                            }}>
+                              ⏰ Expires in: {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                            </p>
+                          )}
                         </div>
 
                         <div className="progress-row">
@@ -1294,11 +1422,26 @@ export default function App() {
                       <>
                         <label>Enter Receiver Code</label>
                         <div className="resolve-row">
-                          <input type="text" value={codeInput} onChange={(e) => setCodeInput(e.target.value)} placeholder="ABCD-1234" />
+                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="ABCD-1234" />
                           <button className="primary" onClick={() => resolveCode()} disabled={isLoading || !codeInput.trim()}>
                             {isLoading ? "Resolving..." : "Resolve"}
                           </button>
                         </div>
+                        {error && (
+                          <div className="error-message" style={{
+                            marginTop: '8px',
+                            padding: '10px',
+                            backgroundColor: '#fef2f2',
+                            border: '1px solid #fecaca',
+                            borderRadius: '8px',
+                            color: '#dc2626',
+                            fontSize: '13px',
+                            lineHeight: '1.4',
+                            whiteSpace: 'pre-line'
+                          }}>
+                            ⚠️ {error}
+                          </div>
+                        )}
                       </>
                     )}
 
@@ -1519,6 +1662,13 @@ export default function App() {
       <ScannerModal open={openScanner} onClose={() => setOpenScanner(false)} onDetected={handleScannerDetected} />
 
       <ConfirmModal open={confirmOpen} title={confirmPayload.title} body={confirmPayload.body} onCancel={confirmPayload.onCancel} onConfirm={() => { confirmPayload.onConfirm && confirmPayload.onConfirm(); }} />
+
+      {/* Confetti blast animation for successful transmissions (desktop only) */}
+      <ConfettiBlast 
+        show={showConfetti} 
+        onComplete={() => setShowConfetti(false)}
+        duration={3000}
+      />
 
       <Footer />
     </div>
