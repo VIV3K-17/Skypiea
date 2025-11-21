@@ -19,7 +19,12 @@ import ConfettiBlast from "./components/ConfettiBlast";
   Uses HTTPS for fetch and WSS for websockets automatically.
   Changed to localhost as requested.
 */
-const API_BASE = "http://localhost:3000";
+const API_BASE = (() => {
+  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+    return "http://localhost:3000";
+  }
+  return "https://skypiea-1.onrender.com";
+})();
 const WS_SCHEME = API_BASE.startsWith("https://") ? "wss" : "ws";
 const WS_BASE = `${WS_SCHEME}://${new URL(API_BASE).host}`;
 
