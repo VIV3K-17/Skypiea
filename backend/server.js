@@ -47,7 +47,11 @@ const TRUST_PROXY = (process.env.TRUST_PROXY || 'false') === 'true';
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173').split(',').map(s => s.trim());
+const ALLOWED_ORIGINS = [
+  'https://skypiea-1.onrender.com',
+  'https://skypieaa.onrender.com',
+  'http://localhost:5173'
+];
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS || 300000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1200000);
 const CHUNK_LIMIT_BYTES = Number(process.env.CHUNK_LIMIT_BYTES || 500 * 1024 * 1024);
