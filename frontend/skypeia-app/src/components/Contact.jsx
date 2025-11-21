@@ -168,8 +168,8 @@ export default function Contact() {
               <p>
                 For general inquiries, bug reports, or data removal requests, email us:
               </p>
-              <a href="mailto:saivivek0789@gmail.com" target="_blank" rel="noopener noreferrer">
-                saivivek0789@gmail.com
+              <a href="mailto:saivivek079@gmail.com" target="_blank" rel="noopener noreferrer">
+                saivivek079@gmail.com
               </a>
             </div>
 
