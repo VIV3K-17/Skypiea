@@ -28,20 +28,13 @@ const RECEIVE_STEPS = { SETUP: "setup", CONNECT: "connect", SEND_FILE: "send_fil
 
 const PRESET_PROFILES = [
   { name: "Gojo Satoru", emoji: "🕶️" },
-  { name: "Zero Two", emoji: "💋" },
   { name: "Itachi Uchiha", emoji: "🦅" },
-  { name: "Tanjiro Kamado", emoji: "🌊" },
   { name: "Light Yagami", emoji: "📓" },
   { name: "L (Lawliet)", emoji: "🍰" },
   { name: "Levi Ackerman", emoji: "🧹" },
-  { name: "Nami", emoji: "🌊" },
   { name: "Saitama", emoji: "🥚" },
-  { name: "Rei Ayanami", emoji: "🌕" },
   { name: "Denji", emoji: "🪚" },
-  { name: "Mikasa Ackerman", emoji: "🗡️" },
   { name: "Naruto Uzumaki", emoji: "🍜" },
-  { name: "Power", emoji: "🩸" },
-  { name: "Rukia Kuchiki", emoji: "❄️" }
 ];
 
 function hashStringToIndex(str) {
@@ -354,6 +347,63 @@ export default function App() {
       .log-card { margin-top: 12px; padding: 12px; border-radius: 8px; background: #fff; border: 1px solid rgba(43,70,60,0.06); }
       .log-head { font-weight: 700; color: #2b463c; margin-bottom: 8px; }
       .log-area { max-height: 210px; overflow: auto; background: #fafafa; border-radius: 6px; padding: 8px; font-size: 12px; }
+
+      /* Confirmation Modal Styling */
+      .modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        animation: fadeIn 0.2s ease-out;
+      }
+
+      .modal-card {
+        background: white;
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 400px;
+        width: 90%;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        animation: slideIn 0.3s ease-out;
+      }
+
+      .modal-card h3 {
+        margin: 0 0 12px 0;
+        color: #2b463c;
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .modal-card p {
+        margin: 0;
+        color: #666;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
+      @keyframes slideIn {
+        from { 
+          opacity: 0;
+          transform: translateY(-20px) scale(0.95);
+        }
+        to { 
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
       `;
       document.head.appendChild(s);
     }
@@ -830,6 +880,20 @@ export default function App() {
       return;
     }
 
+    // Pause transmission while showing confirmation dialog
+    const wasAlreadyPaused = pausedRef.current;
+    if (!wasAlreadyPaused) {
+      pausedRef.current = true;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ type: "control", action: "pause", transferId: transferIdRef.current }));
+        } catch (e) {
+          console.error("stopSending pause error:", e);
+        }
+      }
+      setIsPaused(true);
+    }
+
     setConfirmPayload({
       title: "Stop transfer?",
       body: "This will cancel the transfer and reload the page. Are you sure? ",
@@ -852,6 +916,29 @@ export default function App() {
         setProgress("Stopped");
         setConfirmOpen(false);
         setTimeout(() => window.location.reload(), 250);
+      },
+      onCancel: () => {
+        // Resume transmission if it wasn't already paused
+        if (!wasAlreadyPaused) {
+          pausedRef.current = false;
+          setIsPaused(false);
+          if (resumeResolveRef.current) {
+            try {
+              resumeResolveRef.current();
+            } catch (e) {
+              console.error("stopSending resume error:", e);
+            }
+            resumeResolveRef.current = null;
+          }
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              wsRef.current.send(JSON.stringify({ type: "control", action: "resume", transferId: transferIdRef.current }));
+            } catch (e) {
+              console.error("stopSending resume send error:", e);
+            }
+          }
+        }
+        setConfirmOpen(false);
       },
     });
     setConfirmOpen(true);
@@ -889,6 +976,20 @@ export default function App() {
     }
   }
   function hostStop() {
+    // Pause transmission while showing confirmation dialog
+    const wasAlreadyPaused = pausedRef.current;
+    if (!wasAlreadyPaused && isTransmitting) {
+      pausedRef.current = true;
+      if (hostWsRef.current && hostWsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          hostWsRef.current.send(JSON.stringify({ type: "control", action: "pause", transferId: hostTransferIdRef.current }));
+        } catch (e) {
+          console.error("hostStop pause error:", e);
+        }
+      }
+      setIsPaused(true);
+    }
+
     setConfirmPayload({
       title: "Stop transfer?",
       body: "This will cancel the transfer and reload the page. Are you sure? ",
@@ -905,6 +1006,29 @@ export default function App() {
         setProgress("Stopped");
         setConfirmOpen(false);
         setTimeout(() => window.location.reload(), 250);
+      },
+      onCancel: () => {
+        // Resume transmission if it wasn't already paused
+        if (!wasAlreadyPaused && isTransmitting) {
+          pausedRef.current = false;
+          setIsPaused(false);
+          if (resumeResolveRef.current) {
+            try {
+              resumeResolveRef.current();
+            } catch (e) {
+              console.error("hostStop resume error:", e);
+            }
+            resumeResolveRef.current = null;
+          }
+          if (hostWsRef.current && hostWsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              hostWsRef.current.send(JSON.stringify({ type: "control", action: "resume", transferId: hostTransferIdRef.current }));
+            } catch (e) {
+              console.error("hostStop resume send error:", e);
+            }
+          }
+        }
+        setConfirmOpen(false);
       },
     });
     setConfirmOpen(true);
@@ -978,7 +1102,7 @@ export default function App() {
           <h3>{title}</h3>
           <p style={{ marginTop: 8 }}>{body}</p>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-            <button className="muted-btn" onClick={onCancel}>
+            <button className="muted-btn" onClick={onCancel || (() => setConfirmOpen(false))}>
               Cancel
             </button>
             <button className="primary" onClick={onConfirm}>
@@ -1394,7 +1518,7 @@ export default function App() {
       {/* modals and overlays remain sibling to main (so they can overlay correctly) */}
       <ScannerModal open={openScanner} onClose={() => setOpenScanner(false)} onDetected={handleScannerDetected} />
 
-      <ConfirmModal open={confirmOpen} title={confirmPayload.title} body={confirmPayload.body} onCancel={() => setConfirmOpen(false)} onConfirm={() => { confirmPayload.onConfirm && confirmPayload.onConfirm(); }} />
+      <ConfirmModal open={confirmOpen} title={confirmPayload.title} body={confirmPayload.body} onCancel={confirmPayload.onCancel} onConfirm={() => { confirmPayload.onConfirm && confirmPayload.onConfirm(); }} />
 
       <Footer />
     </div>
