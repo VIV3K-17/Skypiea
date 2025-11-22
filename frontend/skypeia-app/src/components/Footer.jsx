@@ -253,11 +253,12 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
     { url: "https://www.instagram.com/__vivek__zx/#", label: "Instagram" },
     { url: "https://in.linkedin.com/in/vivek-sesetti-74a6b9324", label: "LinkedIn" },
     { url: "https://github.com/VIV3K-17", label: "GitHub" },
+    { url: "https://www.facebook.com/s.sai.vivek.74", label: "Facebook" }
   ];
 
   //
   // Dynamic rating via backend (SQLite)
-  const API_BASE = "http://localhost:3000";
+  const API_BASE = "https://skypiea-2.onrender.com";
   const STORAGE_KEY = "skypiea_rating_voted";
   const [displayAvg, setDisplayAvg] = React.useState(0);
   const [displayCount, setDisplayCount] = React.useState(0);
