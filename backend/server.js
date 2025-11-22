@@ -49,7 +49,7 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const ALLOWED_ORIGINS = [
   'https://skypiea-2.onrender.com',
-  'https://skypieaa.onrender.com',
+  'https://skypieaaa.onrender.com',
   'http://localhost:5173'
 ];
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS || 300000);
