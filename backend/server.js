@@ -85,7 +85,7 @@ if (Database) {
       ratingsDb = new Database(SQLITE_PATH);
       ratingsDb.pragma('journal_mode = WAL');
       // create table if not exists using prepared statement and run it
-      ratingsDb.prepare('CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER NOT NULL CHECK(value BETWEEN 1 AND 5), ip TEXT, ua TEXT, created_at INTEGER NOT NULL)').run();
+      ratingsDb.prepare('CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER NOT NULL CHECK(value BETWEEN 1 AND 5), ip TEXT, ua TEXT, created_at INTEGER NOT NULL)')[...]
       ratingsStmt.insert = ratingsDb.prepare('INSERT INTO ratings (value, ip, ua, created_at) VALUES (?, ?, ?, ?)');
       ratingsStmt.stats = ratingsDb.prepare('SELECT COUNT(*) AS count, AVG(value) AS avg FROM ratings');
       ratingsStmt.checkByIpRecent = ratingsDb.prepare('SELECT COUNT(*) AS c FROM ratings WHERE ip = ? AND created_at > ?');
@@ -180,7 +180,7 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // enable preflight for all routes
+app.options('/*', cors(corsOptions)); // enable preflight for all routes (changed '*' -> '/*' to avoid path-to-regexp error)
 
 // Force HTTPS and HSTS in production. Because CORS runs earlier now, redirect responses
 // will include Access-Control-Allow-Origin when appropriate. Also, avoid redirecting
@@ -331,7 +331,7 @@ app.post('/upload/start', express.json({ limit: '2mb' }), async (req, res) => {
     saveSession(sess);
 
     // persist transfer meta
-    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), received: 0, status: 'started', sha256: null, created_at: createdAt };
+    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), received: 0, status: 'started', sha256: null, created_at: c[...]
     saveTransferMeta(token, transferId, meta);
 
     if (Number(totalSize) > 0) {
