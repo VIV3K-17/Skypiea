@@ -84,6 +84,7 @@ if (Database) {
     } else {
       ratingsDb = new Database(SQLITE_PATH);
       ratingsDb.pragma('journal_mode = WAL');
+      // create table if not exists using prepared statement and run it
       ratingsDb.prepare('CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER NOT NULL CHECK(value BETWEEN 1 AND 5), ip TEXT, ua TEXT, created_at INTEGER NOT NULL)').run();
       ratingsStmt.insert = ratingsDb.prepare('INSERT INTO ratings (value, ip, ua, created_at) VALUES (?, ?, ?, ?)');
       ratingsStmt.stats = ratingsDb.prepare('SELECT COUNT(*) AS count, AVG(value) AS avg FROM ratings');
@@ -162,22 +163,38 @@ const fallbackHttpCount = new client.Counter({ name: 'fallback_http_total', help
 const app = express();
 if (TRUST_PROXY) app.set('trust proxy', 1);
 app.use(helmet());
+
+// CORS must be applied BEFORE any middleware that may terminate the request
+// (redirects, etc.) so preflight and redirect responses receive CORS headers.
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow non-browser requests like curl/postman (origin === undefined)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    console.warn('Blocked CORS origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Upload-Session', 'X-Offset', 'X-Chunk-Sha256'],
+  optionsSuccessStatus: 204
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // enable preflight for all routes
+
+// Force HTTPS and HSTS in production. Because CORS runs earlier now, redirect responses
+// will include Access-Control-Allow-Origin when appropriate. Also, avoid redirecting
+// OPTIONS preflight requests so the browser gets CORS preflight responses instead.
 app.use((req, res, next) => {
   if (NODE_ENV === 'production') {
     const proto = req.headers['x-forwarded-proto'] || req.protocol;
+    if (req.method === 'OPTIONS') return res.sendStatus(204); // preflight handled by cors middleware
     if (proto !== 'https') return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains; preload');
   }
   next();
 });
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
+
 // small JSON bodies still allowed
 app.use(express.json({ limit: '10mb' }));
 
@@ -314,7 +331,7 @@ app.post('/upload/start', express.json({ limit: '2mb' }), async (req, res) => {
     saveSession(sess);
 
     // persist transfer meta
-    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), received: 0, status: 'started', sha256: null, created_at: createdAt, updated_at: createdAt };
+    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), received: 0, status: 'started', sha256: null, created_at: createdAt };
     saveTransferMeta(token, transferId, meta);
 
     if (Number(totalSize) > 0) {
@@ -623,7 +640,12 @@ wss.on('connection', (ws, req) => {
         if (sset) for (const s of sset) try { s.send(JSON.stringify(msg)); } catch (e) {}
         ws.send(JSON.stringify({ type: 'ack', message: `host->control ${action}` }));
       } else {
-        if (hostWs && hostWs.readyState === hostWs.OPEN) { hostWs.send(JSON.stringify(msg)); ws.send(JSON.stringify({ type: 'ack', message: 'forwarded control' })); } else ws.send(JSON.stringify({ type: 'error', message: 'no host connected' }));
+        if (hostWs && hostWs.readyState === hostWs.OPEN) {
+          hostWs.send(JSON.stringify(msg));
+          ws.send(JSON.stringify({ type: 'ack', message: 'forwarded control' }));
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'no host connected' }));
+        }
       }
       return;
     }
