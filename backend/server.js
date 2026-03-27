@@ -69,12 +69,20 @@ const SESSIONS_DIR = path.join(UPLOADS_DIR, '_sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 // ========== Postgres (ratings) ==========
-const DATABASE_URL = process.env.DATABASE_URL || '';
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.POSTGRESQL_URL ||
+  process.env.RENDER_DATABASE_URL ||
+  '';
 let pgPool = null;
 if (DATABASE_URL) {
   pgPool = new Pool({
     connectionString: DATABASE_URL,
-    ssl: DATABASE_URL.includes('supabase.co') ? { rejectUnauthorized: false } : false,
+    ssl:
+      DATABASE_URL.includes('supabase.co') || DATABASE_URL.includes('render.com')
+        ? { rejectUnauthorized: false }
+        : false,
     max: Number(process.env.PG_POOL_MAX || 10),
     idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
     connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
@@ -83,7 +91,31 @@ if (DATABASE_URL) {
     console.error('Postgres pool error:', err && err.message);
   });
 } else {
-  console.warn('DATABASE_URL not set. /rating endpoints will return unavailable.');
+  console.warn('No Postgres URL env var found. /rating endpoints will use file fallback storage.');
+}
+
+const RATINGS_FALLBACK_FILE = path.join(UPLOADS_DIR, '_ratings_fallback.json');
+
+function readFallbackRatings() {
+  const parsed = readJsonSafe(RATINGS_FALLBACK_FILE);
+  if (!parsed || !Array.isArray(parsed.entries)) return { entries: [] };
+  return { entries: parsed.entries };
+}
+
+function writeFallbackRatings(data) {
+  const payload = {
+    entries: Array.isArray(data && data.entries) ? data.entries : [],
+    updatedAt: now(),
+  };
+  return writeJsonSafe(RATINGS_FALLBACK_FILE, payload);
+}
+
+function fallbackRatingStats() {
+  const store = readFallbackRatings();
+  const count = store.entries.length;
+  if (!count) return { avg: null, count: 0 };
+  const sum = store.entries.reduce((acc, item) => acc + Number(item && item.rating ? item.rating : 0), 0);
+  return { avg: sum / count, count };
 }
 
 // ========== Helpers ==========
@@ -127,7 +159,7 @@ function hashIp(ip) {
 }
 
 async function fetchRatingStats() {
-  if (!pgPool) return { avg: null, count: 0 };
+  if (!pgPool) return fallbackRatingStats();
   try {
     const fromView = await pgPool.query('SELECT total_ratings, avg_rating FROM public.rating_stats LIMIT 1');
     if (fromView.rows.length > 0) {
@@ -236,7 +268,6 @@ app.use('/upload/chunk', uploadChunkLimiter);
 // Ratings API (Postgres-backed)
 app.get('/rating', async (req, res) => {
   try {
-    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
     const stats = await fetchRatingStats();
     return res.json(stats);
   } catch (e) {
@@ -247,8 +278,6 @@ app.get('/rating', async (req, res) => {
 
 app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
   try {
-    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
-
     const value = Number((req.body && req.body.value) || 0);
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       return res.status(400).json({ error: 'invalid value' });
@@ -269,6 +298,31 @@ app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
 
     const commentInput = req.body?.comment == null ? null : String(req.body.comment).trim();
     const comment = commentInput && commentInput.length ? commentInput.slice(0, 500) : null;
+
+    if (!pgPool) {
+      const store = readFallbackRatings();
+      const alreadyExists = store.entries.some((entry) => entry && entry.transfer_id === transferId);
+      if (alreadyExists) {
+        return res.status(409).json({ error: 'rating already submitted for this transfer' });
+      }
+
+      store.entries.push({
+        transfer_id: transferId,
+        rating: value,
+        reason_tags: reasonTags,
+        comment,
+        ip_hash: ipHash,
+        user_agent: ua,
+        created_at: now(),
+      });
+
+      if (!writeFallbackRatings(store)) {
+        return res.status(500).json({ error: 'server error' });
+      }
+
+      const stats = fallbackRatingStats();
+      return res.json({ ok: true, ...stats, storage: 'file-fallback' });
+    }
 
     await pgPool.query(
       `INSERT INTO public.transfer_receipts (transfer_id, completed_at)
