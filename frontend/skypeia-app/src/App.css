@@ -137,15 +137,15 @@ html,body,#root { height: 100%; margin: 0; font-family: Inter, "Segoe UI", Robot
   }
 }
 
-@media (max-width: 920px) { 
-  .content-grid { 
-    grid-template-columns: 1fr; 
-    gap: 16px;
-    padding: 16px;
-  }
-  .right-column {
-    order: -1;
-  }
+@media (max-width: 480px) {
+  .code-large { font-size: 20px; letter-spacing: 1px; }
+  .preview-inner { height: 280px; min-height: 240px; }
+  .connection-box, .resolved-quick { padding: 10px; }
+  .connection-box img { max-width: min(220px, 80vw); }
+  .qr-box { width: auto; height: auto; padding: 8px; }
+  .log-area { max-height: 120px; font-size: 12px; }
+  .scanner-video { width: 100%; height: 250px; }
+  .checkbox-inline { flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; }
 }
 
 @media (max-width: 768px) {
@@ -257,9 +257,16 @@ textarea { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px soli
 
 @media (max-width: 480px) {
   .primary, .muted-btn {
-    padding: 16px 20px;
-    width: 100%;
+    padding: 14px 18px;
+    width: auto;
+    min-width: 140px;
     text-align: center;
+  }
+  .host-actions, .resolve-row, .actions-row, .choice-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
   }
 }
 
@@ -271,6 +278,8 @@ textarea { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px soli
 .code-large { font-size:28px; font-weight:900; color:var(--forest-dark); letter-spacing:2px; margin-bottom:8px; text-align:center; }
 .qr-info-row { display:flex; gap:12px; align-items:center; }
 .qr-box { width:140px; height:140px; display:flex; align-items:center; justify-content:center; background:white; border-radius:10px; box-shadow:0 8px 22px rgba(43,70,60,0.06); }
+.connection-box img { max-width: 100%; height: auto; }
+.connection-box .meta { width: 100%; }
 .meta { flex:1; font-size:14px; color:var(--forest-dark); }
 
 .progress-row, .progress-block { margin-top:12px; display:flex; align-items:center; gap:10px; }
@@ -302,6 +311,13 @@ textarea { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px soli
   .create-row { flex-direction: column; gap: 8px; }
   .progress-row, .progress-block { flex-direction: column; gap: 8px; align-items: stretch; }
   .pct, .progress-label { text-align: center; width: auto; }
+  .connection-box {
+    display: flex;
+    flex-direction: column;
+    text-align: center;
+    align-items: center;
+  }
+  .connection-box .meta { text-align: center; }
 }
 
 @media (max-width: 480px) {
@@ -595,7 +611,18 @@ main.main-content {
   }
   
   .mode-actions {
-    flex-direction: column;
+    justify-content: center;
+  }
+  .host-actions button,
+  .resolve-row button,
+  .actions-row button {
+    flex: none;
+  }
+  .host-actions .primary,
+  .host-actions .muted-btn,
+  .resolve-row .primary,
+  .resolve-row .muted-btn {
+    min-width: 120px;
     gap: 12px;
   }
   
