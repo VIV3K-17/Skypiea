@@ -259,12 +259,10 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   //
   // Dynamic rating via backend (SQLite)
   const API_BASE = "https://skypiea-2.onrender.com";
-  const STORAGE_KEY = "skypiea_rating_voted";
   const [displayAvg, setDisplayAvg] = React.useState(0);
   const [displayCount, setDisplayCount] = React.useState(0);
   const [userRating, setUserRating] = React.useState(null);
   const [hoverRating, setHoverRating] = React.useState(0);
-  const [showInteractive, setShowInteractive] = React.useState(true);
   
   // Modal state for rating confirmation
   const [ratingModalOpen, setRatingModalOpen] = React.useState(false);
@@ -282,8 +280,6 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   };
 
   React.useEffect(() => {
-    const voted = localStorage.getItem(STORAGE_KEY);
-    setShowInteractive(!voted);
     fetchStats();
   }, []);
 
@@ -303,8 +299,6 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
       }
       const data = await res.json();
       setUserRating(n);
-      setShowInteractive(false);
-      localStorage.setItem(STORAGE_KEY, "1");
       const avg = typeof data.avg === "number" ? Number(data.avg.toFixed(2)) : displayAvg;
       const cnt = typeof data.count === "number" ? data.count : displayCount + 1;
       setDisplayAvg(avg);
@@ -373,41 +367,37 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
               </div>
             </div>
 
-            {/* Interactive stars when not yet voted */}
-            {showInteractive ? (
-              <>
-                <div className="star-row" role="radiogroup" aria-label="Rate Skypiea">
-                  {Array.from({ length: 5 }).map((_, i) => {
-                    const n = i + 1;
-                    const isFilled = hoverRating ? n <= hoverRating : false;
-                    return (
-                      <button
-                        key={n}
-                        className="star-btn"
-                        role="radio"
-                        aria-checked={false}
-                        aria-label={`${n} star${n > 1 ? "s" : ""}`}
-                        onClick={() => handleVote(n)}
-                        onKeyDown={(e) => handleKey(e, n)}
-                        onMouseEnter={() => setHoverRating(n)}
-                        onMouseLeave={() => setHoverRating(0)}
-                        title={`Rate ${n} star${n > 1 ? "s" : ""}`}
-                      >
-                        <svg viewBox="0 0 24 24" className="star-svg" aria-hidden>
-                          <path d="M12 .587l3.668 7.431 8.2 1.193-5.934 5.789 1.402 8.17L12 18.896l-7.336 3.873 1.402-8.17L.132 9.211l8.2-1.193z"
-                            fill={isFilled ? "#f59e0b" : "#e6e7eb"} />
-                        </svg>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="star-hint">Click a star to rate Skypiea</div>
-              </>
-            ) : (
-              <div className="star-hint" aria-hidden>
-                {userRating ? `Thanks — you rated ${userRating} star${userRating > 1 ? "s" : ""}.` : "Thanks for your rating."}
+            <>
+              <div className="star-row" role="radiogroup" aria-label="Rate Skypiea">
+                {Array.from({ length: 5 }).map((_, i) => {
+                  const n = i + 1;
+                  const active = hoverRating || userRating || 0;
+                  const isFilled = n <= active;
+                  return (
+                    <button
+                      key={n}
+                      className="star-btn"
+                      role="radio"
+                      aria-checked={active === n}
+                      aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                      onClick={() => handleVote(n)}
+                      onKeyDown={(e) => handleKey(e, n)}
+                      onMouseEnter={() => setHoverRating(n)}
+                      onMouseLeave={() => setHoverRating(0)}
+                      title={`Rate ${n} star${n > 1 ? "s" : ""}`}
+                    >
+                      <svg viewBox="0 0 24 24" className="star-svg" aria-hidden>
+                        <path d="M12 .587l3.668 7.431 8.2 1.193-5.934 5.789 1.402 8.17L12 18.896l-7.336 3.873 1.402-8.17L.132 9.211l8.2-1.193z"
+                          fill={isFilled ? "#f59e0b" : "#e6e7eb"} />
+                      </svg>
+                    </button>
+                  );
+                })}
               </div>
-            )}
+              <div className="star-hint">
+                {userRating ? `Your latest selection: ${userRating} star${userRating > 1 ? "s" : ""}.` : "Click a star to rate Skypiea"}
+              </div>
+            </>
           </div>
         </div>
 

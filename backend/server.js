@@ -1,6 +1,6 @@
 // backend/server_nodb.js
-// Enhanced: supports transfers up to 5 GB without any database.
-// - Removes SQLite dependence; uses filesystem JSON metadata instead
+// Enhanced: supports transfers up to 5 GB with Postgres-backed ratings metadata.
+// - Uses filesystem JSON metadata for transfers and Postgres for ratings
 // - Streaming-safe chunk writes (writes incoming request buffers to file at given offset)
 // - Session and transfer metadata persisted to JSON files under uploads/ so restarts keep state
 // - Maintains original features: ephemeral sessions, pre-allocation, worker SHA, TURN creds, WebSocket signaling
@@ -23,9 +23,7 @@ const { WebSocketServer } = require('ws');
 const client = require('prom-client');
 const qrcode = require('qrcode');
 const { Worker } = require('worker_threads');
-// SQLite for dynamic ratings
-let Database = null;
-try { Database = require('better-sqlite3'); } catch (e) { try { Database = require('sqlite3'); } catch (ee) { Database = null; } }
+const { Pool } = require('pg');
 
 const USE_CLUSTER = (process.env.USE_CLUSTER || 'false') === 'true';
 const NUM_CPUS = os.cpus().length;
@@ -70,41 +68,42 @@ const MAX_TMP_FILE_AGE_MS = Number(process.env.MAX_TMP_FILE_AGE_MS || 7 * 24 * 6
 const SESSIONS_DIR = path.join(UPLOADS_DIR, '_sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-// ========== SQLite (ratings) ==========
-let ratingsDb = null;
-let ratingsStmt = { insert: null, stats: null, checkByIpRecent: null };
-const SQLITE_PATH = process.env.SQLITE_PATH || path.join(__dirname, 'data.db');
-if (Database) {
-  try {
-    if (Database.name === 'sqlite3') {
-      const sqlite3 = Database.verbose();
-      ratingsDb = new sqlite3.Database(SQLITE_PATH);
-      ratingsDb.serialize(() => {
-        ratingsDb.run('CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER NOT NULL CHECK(value BETWEEN 1 AND 5), ip TEXT, ua TEXT, created_at INTEGER NOT NULL)');
-      });
-    } else {
-      ratingsDb = new Database(SQLITE_PATH);
-      ratingsDb.pragma('journal_mode = WAL');
-      ratingsDb.prepare('CREATE TABLE IF NOT EXISTS ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER NOT NULL CHECK(value BETWEEN 1 AND 5), ip TEXT, ua TEXT, created_at INTEGER NOT NULL)').run();
-      ratingsStmt.insert = ratingsDb.prepare('INSERT INTO ratings (value, ip, ua, created_at) VALUES (?, ?, ?, ?)');
-      ratingsStmt.stats = ratingsDb.prepare('SELECT COUNT(*) AS count, AVG(value) AS avg FROM ratings');
-      ratingsStmt.checkByIpRecent = ratingsDb.prepare('SELECT COUNT(*) AS c FROM ratings WHERE ip = ? AND created_at > ?');
-    }
-  } catch (e) {
-    console.warn('Ratings DB init failed:', e && e.message);
-    ratingsDb = null;
-  }
+// ========== Postgres (ratings) ==========
+const DATABASE_URL = process.env.DATABASE_URL || '';
+let pgPool = null;
+if (DATABASE_URL) {
+  pgPool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: DATABASE_URL.includes('supabase.co') ? { rejectUnauthorized: false } : false,
+    max: Number(process.env.PG_POOL_MAX || 10),
+    idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
+  });
+  pgPool.on('error', (err) => {
+    console.error('Postgres pool error:', err && err.message);
+  });
+} else {
+  console.warn('DATABASE_URL not set. /rating endpoints will return unavailable.');
 }
 
 // ========== Helpers ==========
 function now() { return Date.now(); }
 function makeCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let s = '';
-  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  let t = '';
-  for (let i = 0; i < 4; i++) t += chars[Math.floor(Math.random() * chars.length)];
-  return `${s}-${t}`;
+  const lowers = 'abcdefghijklmnopqrstuvwxyz';
+  const uppers = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const specials = '!@#$%&*';
+  const all = `${lowers}${uppers}${specials}`;
+  const chars = [
+    lowers[Math.floor(Math.random() * lowers.length)],
+    uppers[Math.floor(Math.random() * uppers.length)],
+    specials[Math.floor(Math.random() * specials.length)],
+    all[Math.floor(Math.random() * all.length)],
+  ];
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
 }
 function makeToken() { return crypto.randomBytes(20).toString('hex'); }
 function makeSessionId() { return crypto.randomBytes(16).toString('hex'); }
@@ -121,9 +120,30 @@ function timingEquals(a, b) {
   } catch { return false; }
 }
 
-function normalizeAuthLetters(v) {
-  const s = String(v || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 4);
-  return s.length === 4 ? s : null;
+function hashIp(ip) {
+  const base = String(ip || '').trim();
+  if (!base) return null;
+  return crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+}
+
+async function fetchRatingStats() {
+  if (!pgPool) return { avg: null, count: 0 };
+  try {
+    const fromView = await pgPool.query('SELECT total_ratings, avg_rating FROM public.rating_stats LIMIT 1');
+    if (fromView.rows.length > 0) {
+      const row = fromView.rows[0];
+      return {
+        avg: row.avg_rating != null ? Number(row.avg_rating) : null,
+        count: row.total_ratings != null ? Number(row.total_ratings) : 0,
+      };
+    }
+  } catch (e) {
+    // If view is unavailable, fallback to direct aggregate below.
+  }
+
+  const agg = await pgPool.query('SELECT COUNT(*)::int AS count, AVG(rating)::numeric AS avg FROM public.ratings');
+  const row = agg.rows[0] || { count: 0, avg: null };
+  return { avg: row.avg != null ? Number(row.avg) : null, count: Number(row.count || 0) };
 }
 
 function readJsonSafe(p) {
@@ -213,58 +233,63 @@ const uploadChunkLimiter = rateLimit({ windowMs: 60 * 1000, max: 1000, message: 
 app.use('/upload/chunk', uploadChunkLimiter);
 
 // ========== Routes ==========
-// Ratings API (SQLite-backed if available)
-app.get('/rating', (req, res) => {
+// Ratings API (Postgres-backed)
+app.get('/rating', async (req, res) => {
   try {
-    if (!ratingsDb) return res.json({ avg: null, count: 0 });
-    if (ratingsDb.prepare) {
-      const row = ratingsStmt.stats.get();
-      const avg = row && row.avg != null ? Number(row.avg) : null;
-      const count = row && row.count != null ? Number(row.count) : 0;
-      return res.json({ avg, count });
-    } else {
-      ratingsDb.get('SELECT COUNT(*) AS count, AVG(value) AS avg FROM ratings', (err, row) => {
-        if (err) return res.status(500).json({ error: 'db error' });
-        const avg = row && row.avg != null ? Number(row.avg) : null;
-        const count = row && row.count != null ? Number(row.count) : 0;
-        return res.json({ avg, count });
-      });
-    }
+    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
+    const stats = await fetchRatingStats();
+    return res.json(stats);
   } catch (e) {
+    console.error('GET /rating failed', e);
     return res.status(500).json({ error: 'server error' });
   }
 });
 
-app.post('/rating', express.json({ limit: '1mb' }), (req, res) => {
+app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
   try {
-    if (!ratingsDb) return res.status(500).json({ error: 'ratings not available' });
-    const value = Number((req.body && req.body.value) || 0);
-    if (!Number.isInteger(value) || value < 1 || value > 5) return res.status(400).json({ error: 'invalid value' });
-    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
-    const ua = (req.headers['user-agent'] || '').slice(0, 200);
-    const nowTs = Date.now();
+    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
 
-    // Optional: basic abuse control - limit to 1 per 10 minutes per IP
-    if (ratingsDb.prepare) {
-      const recent = ratingsStmt.checkByIpRecent.get(ip, nowTs - 10 * 60 * 1000);
-      if (recent && recent.c > 0) return res.status(429).json({ error: 'too many ratings from this IP' });
-      ratingsStmt.insert.run(value, ip, ua, nowTs);
-      const row = ratingsStmt.stats.get();
-      return res.json({ ok: true, avg: row && row.avg != null ? Number(row.avg) : null, count: row && row.count != null ? Number(row.count) : 0 });
-    } else {
-      ratingsDb.get('SELECT COUNT(*) AS c FROM ratings WHERE ip = ? AND created_at > ?', [ip, nowTs - 10 * 60 * 1000], (err, r) => {
-        if (err) return res.status(500).json({ error: 'db error' });
-        if (r && r.c > 0) return res.status(429).json({ error: 'too many ratings from this IP' });
-        ratingsDb.run('INSERT INTO ratings (value, ip, ua, created_at) VALUES (?, ?, ?, ?)', [value, ip, ua, nowTs], (e2) => {
-          if (e2) return res.status(500).json({ error: 'db error' });
-          ratingsDb.get('SELECT COUNT(*) AS count, AVG(value) AS avg FROM ratings', (e3, row) => {
-            if (e3) return res.status(500).json({ error: 'db error' });
-            return res.json({ ok: true, avg: row && row.avg != null ? Number(row.avg) : null, count: row && row.count != null ? Number(row.count) : 0 });
-          });
-        });
-      });
+    const value = Number((req.body && req.body.value) || 0);
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      return res.status(400).json({ error: 'invalid value' });
     }
+
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').toString().split(',')[0].trim();
+    const ipHash = hashIp(ip);
+    const ua = (req.headers['user-agent'] || '').slice(0, 200);
+
+    const rawTransferId = String((req.body && req.body.transferId) || '').trim();
+    const transferId = rawTransferId || `anon-${(ipHash || 'na').slice(0, 12)}-${Math.floor(Date.now() / (10 * 60 * 1000))}`;
+
+    const rawTags = Array.isArray(req.body?.reasonTags) ? req.body.reasonTags : [];
+    const reasonTags = rawTags
+      .map((t) => String(t || '').trim().toLowerCase())
+      .filter((t) => /^[a-z0-9_-]{2,24}$/.test(t))
+      .slice(0, 8);
+
+    const commentInput = req.body?.comment == null ? null : String(req.body.comment).trim();
+    const comment = commentInput && commentInput.length ? commentInput.slice(0, 500) : null;
+
+    await pgPool.query(
+      `INSERT INTO public.transfer_receipts (transfer_id, completed_at)
+       VALUES ($1, NOW())
+       ON CONFLICT (transfer_id) DO NOTHING`,
+      [transferId]
+    );
+
+    await pgPool.query(
+      `INSERT INTO public.ratings (transfer_id, rating, reason_tags, comment, ip_hash, user_agent)
+       VALUES ($1, $2, $3::text[], $4, $5, $6)`,
+      [transferId, value, reasonTags, comment, ipHash, ua]
+    );
+
+    const stats = await fetchRatingStats();
+    return res.json({ ok: true, ...stats });
   } catch (e) {
+    if (e && e.code === '23505') {
+      return res.status(409).json({ error: 'rating already submitted for this transfer' });
+    }
+    console.error('POST /rating failed', e);
     return res.status(500).json({ error: 'server error' });
   }
 });
@@ -494,6 +519,20 @@ app.post('/upload/complete', express.json({ limit: '2mb' }), async (req, res) =>
     const rcptPath = path.join(tokenDir, `${rcptId}.json`);
     writeJsonSafe(rcptPath, { id: rcptId, transferId, created_at: now(), finalName, size: stat.size });
 
+    if (pgPool) {
+      try {
+        await pgPool.query(
+          `INSERT INTO public.transfer_receipts (transfer_id, file_name, size_bytes, completed_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (transfer_id)
+           DO UPDATE SET file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes, completed_at = NOW()`,
+          [transferId, finalName, stat.size]
+        );
+      } catch (dbErr) {
+        console.warn('transfer_receipts upsert failed:', dbErr && dbErr.message);
+      }
+    }
+
     deleteSession(sessionId);
     uploadsCompleted.inc();
 
@@ -590,10 +629,6 @@ wss.on('connection', (ws, req) => {
       if (!Number.isFinite(parsedSize) || parsedSize <= 0 || parsedSize > MAX_TRANSFER_BYTES) {
         return ws.send(JSON.stringify({ type: 'error', message: `file exceeds max limit (${MAX_TRANSFER_BYTES} bytes)` }));
       }
-      const authLetters = normalizeAuthLetters(msg.authLetters);
-      if (!authLetters) {
-        return ws.send(JSON.stringify({ type: 'error', message: 'missing auth letters' }));
-      }
 
       let tmap = transfersCache.get(token);
       if (!tmap) { tmap = new Map(); transfersCache.set(token, tmap); }
@@ -607,15 +642,13 @@ wss.on('connection', (ws, req) => {
         totalSize: parsedSize,
         received: 0,
         startedAt: now(),
-        wantP2P: !!wantP2P,
-        auth: { letters: authLetters, status: 'pending' }
+        wantP2P: !!wantP2P
       };
       tmap.set(transferId, transferMeta);
 
       const hostWs = hostsByToken.get(token);
       if (hostWs && hostWs.readyState === hostWs.OPEN) {
-        hostWs.send(JSON.stringify({ type: 'start', transferId, filename: transferMeta.filename, totalSize: transferMeta.totalSize, authLetters }));
-        ws.send(JSON.stringify({ type: 'auth-pending', transferId }));
+        hostWs.send(JSON.stringify({ type: 'start', transferId, filename: transferMeta.filename, totalSize: transferMeta.totalSize }));
       } else {
         const tokenDir = path.join(UPLOADS_DIR, token);
         if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
@@ -624,9 +657,8 @@ wss.on('connection', (ws, req) => {
           const stream = fs.createWriteStream(outPath, { flags: 'w', highWaterMark: 4 * 1024 * 1024 });
           ws._meta.stream = stream;
         } catch (e) { console.warn('create stream failed', e); }
-        transferMeta.auth.status = 'skipped';
-        ws.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
       }
+      ws.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
       return;
     }
 
@@ -653,38 +685,6 @@ wss.on('connection', (ws, req) => {
       const hostWs = hostsByToken.get(token);
       if (ws._meta.role === 'host') {
         const sset = sendersByToken.get(token);
-        if (action === 'auth-approved' || action === 'auth-rejected') {
-          const transferId = msg.transferId;
-          const tmap = transfersCache.get(token);
-          const tmeta = tmap && transferId ? tmap.get(transferId) : null;
-          if (!tmeta) return ws.send(JSON.stringify({ type: 'error', message: 'transfer not found' }));
-
-          if (action === 'auth-approved') {
-            tmeta.auth = { ...(tmeta.auth || {}), status: 'approved' };
-            if (sset) {
-              for (const s of sset) {
-                if (s._meta && s._meta.currentTransferId === transferId && s.readyState === s.OPEN) {
-                  try {
-                    s.send(JSON.stringify({ type: 'auth-approved', transferId }));
-                    s.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
-                  } catch (e) {}
-                }
-              }
-            }
-          } else {
-            tmeta.auth = { ...(tmeta.auth || {}), status: 'rejected' };
-            if (sset) {
-              for (const s of sset) {
-                if (s._meta && s._meta.currentTransferId === transferId && s.readyState === s.OPEN) {
-                  try {
-                    s.send(JSON.stringify({ type: 'auth-rejected', transferId, message: 'receiver rejected authentication' }));
-                  } catch (e) {}
-                }
-              }
-            }
-          }
-        }
-
         if (sset) for (const s of sset) try { s.send(JSON.stringify(msg)); } catch (e) {}
         ws.send(JSON.stringify({ type: 'ack', message: `host->control ${action}` }));
       } else {

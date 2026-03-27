@@ -69,13 +69,6 @@ function formatBytes(n) {
   return `${value.toFixed(exp === 0 ? 0 : exp === 1 ? 1 : 2)} ${units[exp]}`;
 }
 
-function makeAuthLetters() {
-  const letters = "abcdefghijklmnopqrstuvwxyz";
-  let out = "";
-  for (let i = 0; i < 4; i += 1) out += letters[Math.floor(Math.random() * letters.length)];
-  return out;
-}
-
 /* ===== ConnectedPanel (in-file) ===== */
 function ConnectedPanel(props) {
   const {
@@ -297,6 +290,49 @@ function ScannerModal({ open, onClose, onDetected }) {
     }, 200);
   };
 
+  const decodeQrFromImageFile = async (file) => {
+    if (!file) return;
+    try {
+      const imageUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let canvas = canvasRef.current;
+          if (!canvas) {
+            canvas = document.createElement("canvas");
+            canvasRef.current = canvas;
+          }
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            URL.revokeObjectURL(imageUrl);
+            return;
+          }
+
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = typeof jsQR === "function" ? jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" }) : null;
+          if (code && code.data) {
+            onDetected(code.data);
+            stopCamera();
+          } else {
+            console.warn("No QR found in uploaded image");
+          }
+        } finally {
+          URL.revokeObjectURL(imageUrl);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(imageUrl);
+        console.error("Failed to load uploaded image");
+      };
+      img.src = imageUrl;
+    } catch (e) {
+      console.error("decodeQrFromImageFile failed:", e);
+    }
+  };
+
   const handleClose = () => {
     stopCamera();
     onClose();
@@ -323,6 +359,18 @@ function ScannerModal({ open, onClose, onDetected }) {
           <div className="scanner-overlay">
             <div className="scanner-status">Scanning…</div>
             <div className="scanner-instruction">Hold QR inside the box</div>
+          </div>
+
+          <div style={{ marginTop: 12, textAlign: "center" }}>
+            <label className="muted-btn" style={{ cursor: "pointer", display: "inline-block" }}>
+              Upload QR Image
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => decodeQrFromImageFile(e.target.files?.[0] || null)}
+              />
+            </label>
           </div>
         </div>
       </div>
@@ -504,9 +552,6 @@ export default function App() {
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(null);
-  const [pendingAuth, setPendingAuth] = useState(null);
-  const [senderAuthLetters, setSenderAuthLetters] = useState("");
-  const [senderAuthStatus, setSenderAuthStatus] = useState("idle");
   const [speedText, setSpeedText] = useState("");
   const bytesSentRef = useRef(0);
   const speedWindowRef = useRef({ at: 0, bytes: 0 });
@@ -665,20 +710,8 @@ export default function App() {
                 hostChunksRef.current.total = m.totalSize || 0;
                 hostChunksRef.current.filename = m.filename || "download.bin";
                 setProgress("0%");
-                if (m.authLetters) {
-                  setPendingAuth({
-                    letters: String(m.authLetters).toLowerCase(),
-                    transferId: m.transferId,
-                    filename: m.filename || "download.bin",
-                    totalSize: m.totalSize || 0,
-                  });
-                  setProgress("Awaiting device authentication");
-                } else {
-                  setPendingAuth(null);
-                }
                 logMsg("Incoming file:", hostChunksRef.current.filename);
               } else if (m.type === "complete") {
-                setPendingAuth(null);
                 const blob = new Blob(hostChunksRef.current.chunks);
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
@@ -694,19 +727,6 @@ export default function App() {
                 hostChunksRef.current.chunks = [];
               } else if (m.type === "error") {
                 setError(m.message || "Receiver error");
-              } else if (m.type === "auth-pending") {
-                setProgress("Waiting for receiver to verify auth letters");
-              } else if (m.type === "auth-approved") {
-                setSenderAuthStatus("approved");
-                setProgress("Authentication successful. Sending...");
-              } else if (m.type === "auth-rejected") {
-                setSenderAuthStatus("rejected");
-                setError("Receiver rejected authentication letters.");
-                try {
-                  hws.close();
-                } catch {
-                  /* ignore close failures */
-                }
               } else if (m.type === "control" && m.action) {
                 if (m.action === "pause") {
                   setIsPaused(true);
@@ -714,12 +734,6 @@ export default function App() {
                 } else if (m.action === "resume") {
                   setIsPaused(false);
                   pausedRef.current = false;
-                } else if (m.action === "auth-approved") {
-                  setPendingAuth(null);
-                  setProgress("Authentication successful. Receiving...");
-                } else if (m.action === "auth-rejected") {
-                  setPendingAuth(null);
-                  setProgress("Authentication rejected");
                 } else if (m.action === "stop") {
                   setIsTransmitting(false);
                   setIsPaused(false);
@@ -782,9 +796,9 @@ export default function App() {
       if (!res.ok) {
         if (res.status === 404) {
           // Check if code format looks correct
-          const codePattern = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4})?$/i;
+          const codePattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%&*])[A-Za-z!@#$%&*]{4}$/;
           if (!codePattern.test(trimmedCode)) {
-            throw new Error(`Invalid code format. Expected format: ABCD-1234 (got: "${trimmedCode}")`);
+            throw new Error(`Invalid code format. Use 4 characters with lower + upper + special (example: aB#x).`);
           } else {
             throw new Error(`Code "${trimmedCode}" not found. Please check if:\n• The code was typed correctly\n• The receiver is still online\n• The code hasn't expired (5-minute limit)`);
           }
@@ -826,14 +840,11 @@ export default function App() {
 
       ws.onopen = () => {
         const transferId = "t-" + Math.random().toString(36).slice(2, 10);
-        const authLetters = makeAuthLetters();
         transferIdRef.current = transferId;
         pausedRef.current = false;
         stoppedRef.current = false;
         bytesSentRef.current = 0;
         speedWindowRef.current = { at: performance.now(), bytes: 0 };
-        setSenderAuthLetters(authLetters);
-        setSenderAuthStatus("pending");
         setIsTransmitting(true);
         setIsPaused(false);
         ws.send(
@@ -844,7 +855,6 @@ export default function App() {
             transferId,
             filename: file.name,
             totalSize: file.size,
-            authLetters,
           })
         );
       };
@@ -899,29 +909,13 @@ export default function App() {
             } catch (err) {
               logMsg("Upload error:", err?.message || err);
               setError(err?.message || "Upload failed");
-              setSenderAuthStatus("rejected");
             }
           } else if (msg.type === "complete") {
             logMsg("Transfer complete!");
             setProgress("Done!");
             setSpeedText("");
             setIsTransmitting(false);
-            setSenderAuthStatus("approved");
             setShowConfetti(true); // Trigger confetti blast on successful completion
-            ws.close();
-          } else if (msg.type === "auth-pending") {
-            setSenderAuthStatus("pending");
-            setProgress("Waiting for receiver to verify auth letters");
-          } else if (msg.type === "auth-approved") {
-            setSenderAuthStatus("approved");
-            setProgress((p) => (p === "Waiting for receiver to verify auth letters" ? "0%" : p));
-            logMsg("Receiver approved auth letters");
-          } else if (msg.type === "auth-rejected") {
-            setSenderAuthStatus("rejected");
-            setIsTransmitting(false);
-            setIsPaused(false);
-            setProgress("Authentication rejected");
-            setError(msg.message || "Receiver rejected authentication letters.");
             ws.close();
           } else if (msg.type === "paused") {
             pausedRef.current = true;
@@ -955,12 +949,6 @@ export default function App() {
               setIsTransmitting(false);
               setIsPaused(false);
               setProgress("Stopped by receiver");
-              ws.close();
-            } else if (msg.action === "auth-approved") {
-              setSenderAuthStatus("approved");
-            } else if (msg.action === "auth-rejected") {
-              setSenderAuthStatus("rejected");
-              setError("Receiver rejected authentication letters.");
               ws.close();
             }
           } else if (msg.type === "error") {
@@ -1072,46 +1060,6 @@ export default function App() {
   };
 
   // ------- Transfer controls (unchanged logic) -------
-  function approveIncomingTransfer() {
-    if (!pendingAuth || !hostWsRef.current || hostWsRef.current.readyState !== WebSocket.OPEN) return;
-    try {
-      hostWsRef.current.send(
-        JSON.stringify({
-          type: "control",
-          action: "auth-approved",
-          transferId: pendingAuth.transferId,
-          token: connection?.token,
-        })
-      );
-      setPendingAuth(null);
-      setProgress("Authentication successful. Receiving...");
-      logMsg("Receiver approved auth letters");
-    } catch (e) {
-      console.error("approveIncomingTransfer error:", e);
-      setError("Failed to approve transfer authentication");
-    }
-  }
-
-  function rejectIncomingTransfer() {
-    if (!pendingAuth || !hostWsRef.current || hostWsRef.current.readyState !== WebSocket.OPEN) return;
-    try {
-      hostWsRef.current.send(
-        JSON.stringify({
-          type: "control",
-          action: "auth-rejected",
-          transferId: pendingAuth.transferId,
-          token: connection?.token,
-        })
-      );
-      setPendingAuth(null);
-      setProgress("Authentication rejected");
-      logMsg("Receiver rejected auth letters");
-    } catch (e) {
-      console.error("rejectIncomingTransfer error:", e);
-      setError("Failed to reject transfer authentication");
-    }
-  }
-
   function pauseSending() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       pausedRef.current = true;
@@ -1335,9 +1283,6 @@ export default function App() {
     setHostStep(HOST_STEPS.CONFIGURE);
     setProgress("");
     setTimeRemaining(null);
-    setPendingAuth(null);
-    setSenderAuthLetters("");
-    setSenderAuthStatus("idle");
     setSpeedText("");
     
     // Clear any active timeout
@@ -1575,40 +1520,6 @@ export default function App() {
                           <div className="pct">{progress || "0%"}</div>
                         </div>
 
-                        {pendingAuth && (
-                          <div
-                            style={{
-                              marginTop: 12,
-                              border: "1px solid rgba(43,70,60,0.18)",
-                              borderRadius: 10,
-                              padding: 12,
-                              background: "rgba(177,209,130,0.12)",
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, color: "#2b463c", marginBottom: 6 }}>Device Authentication</div>
-                            <div style={{ fontSize: 13, color: "#334155", marginBottom: 8 }}>
-                              Verify these lowercase letters match on sender device before receiving:
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 24,
-                                fontWeight: 800,
-                                letterSpacing: 4,
-                                color: "#153225",
-                                marginBottom: 8,
-                                textTransform: "lowercase",
-                              }}
-                            >
-                              {pendingAuth.letters}
-                            </div>
-                            <div style={{ display: "flex", gap: 8 }}>
-                              <button className="primary" onClick={approveIncomingTransfer}>Approve</button>
-                              <button className="muted-btn" onClick={rejectIncomingTransfer} style={{ borderColor: "#8b2a2a", color: "#8b2a2a" }}>
-                                Reject
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -1637,7 +1548,7 @@ export default function App() {
                       <>
                         <label>Enter Receiver Code</label>
                         <div className="resolve-row">
-                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="ABCD-1234" />
+                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="aB#x" />
                           <button className="primary" onClick={() => resolveCode()} disabled={isLoading || !codeInput.trim()}>
                             {isLoading ? "Resolving..." : "Resolve"}
                           </button>
@@ -1705,28 +1616,7 @@ export default function App() {
                           ConnectedIcon={ConnectedIcon}
                         />
 
-                        {senderAuthLetters && (
-                          <div
-                            style={{
-                              marginTop: 10,
-                              border: "1px solid rgba(43,70,60,0.16)",
-                              borderRadius: 10,
-                              padding: 10,
-                              background: "rgba(43,70,60,0.04)",
-                            }}
-                          >
-                            <div style={{ fontSize: 13, color: "#334155", marginBottom: 6 }}>
-                              Device authentication letters (must match receiver):
-                            </div>
-                            <div style={{ fontSize: 22, fontWeight: 800, color: "#153225", letterSpacing: 4, textTransform: "lowercase" }}>
-                              {senderAuthLetters}
-                            </div>
-                            <div style={{ fontSize: 12, color: "#475569", marginTop: 6 }}>
-                              Status: {senderAuthStatus === "approved" ? "Approved" : senderAuthStatus === "rejected" ? "Rejected" : "Pending receiver verification"}
-                            </div>
-                            {speedText && <div style={{ fontSize: 12, color: "#0f766e", marginTop: 4 }}>Live speed: {speedText}</div>}
-                          </div>
-                        )}
+                        {speedText && <div style={{ fontSize: 12, color: "#0f766e", marginTop: 8 }}>Live speed: {speedText}</div>}
                       </>
                     )}
 
@@ -1775,8 +1665,8 @@ export default function App() {
     </li>
 
     <li>
-      <div className="constraints-key">Device authentication</div>
-      <div className="constraints-value">Approve transfer only when 4 lowercase letters match on both devices</div>
+      <div className="constraints-key">Connection code format</div>
+      <div className="constraints-value">Use exactly 4 characters with lower + upper + special (example: aB#x)</div>
     </li>
 
     <li>
