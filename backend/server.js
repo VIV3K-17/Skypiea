@@ -55,6 +55,7 @@ const ALLOWED_ORIGINS = [
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS || 300000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1200000);
 const CHUNK_LIMIT_BYTES = Number(process.env.CHUNK_LIMIT_BYTES || 500 * 1024 * 1024);
+const MAX_TRANSFER_BYTES = Number(process.env.MAX_TRANSFER_BYTES || 5 * 1024 * 1024 * 1024);
 const MAX_ACTIVE_TRANSFERS = Number(process.env.MAX_ACTIVE_TRANSFERS || 100);
 const HMAC_SECRET = process.env.HMAC_SECRET || crypto.randomBytes(32).toString('hex');
 
@@ -101,7 +102,9 @@ function makeCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let s = '';
   for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
+  let t = '';
+  for (let i = 0; i < 4; i++) t += chars[Math.floor(Math.random() * chars.length)];
+  return `${s}-${t}`;
 }
 function makeToken() { return crypto.randomBytes(20).toString('hex'); }
 function makeSessionId() { return crypto.randomBytes(16).toString('hex'); }
@@ -118,6 +121,11 @@ function timingEquals(a, b) {
   } catch { return false; }
 }
 
+function normalizeAuthLetters(v) {
+  const s = String(v || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 4);
+  return s.length === 4 ? s : null;
+}
+
 function readJsonSafe(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
 }
@@ -130,6 +138,24 @@ const connections = new Map(); // code -> { token, code, createdAt, expiresAt, d
 const hostsByToken = new Map(); // token -> ws
 const sendersByToken = new Map(); // token -> Set(ws)
 const transfersCache = new Map(); // token -> Map(transferId -> meta)
+
+function addSenderSocket(token, ws) {
+  if (!token || !ws) return;
+  let set = sendersByToken.get(token);
+  if (!set) {
+    set = new Set();
+    sendersByToken.set(token, set);
+  }
+  set.add(ws);
+}
+
+function removeSenderSocket(token, ws) {
+  if (!token || !ws) return;
+  const set = sendersByToken.get(token);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) sendersByToken.delete(token);
+}
 
 // helper to persist transfer metadata to token dir
 function transferMetaPath(token, transferId) {
@@ -303,6 +329,10 @@ app.post('/upload/start', express.json({ limit: '2mb' }), async (req, res) => {
     const sessionId = makeSessionId();
     const createdAt = now();
     const expiresAt = createdAt + SESSION_TTL_MS;
+    const parsedSize = Number(totalSize || 0);
+    if (!Number.isFinite(parsedSize) || parsedSize < 0 || parsedSize > MAX_TRANSFER_BYTES) {
+      return res.status(400).json({ error: `totalSize must be between 0 and ${MAX_TRANSFER_BYTES}` });
+    }
 
     const tokenDir = path.join(UPLOADS_DIR, token);
     if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
@@ -310,11 +340,11 @@ app.post('/upload/start', express.json({ limit: '2mb' }), async (req, res) => {
     const tmpPath = path.join(tokenDir, `transfer-${transferId}.tmp`);
 
     // persist session to FS
-    const sess = { sessionId, token, transferId, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), createdAt, expiresAt };
+    const sess = { sessionId, token, transferId, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: parsedSize, createdAt, expiresAt };
     saveSession(sess);
 
     // persist transfer meta
-    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: Number(totalSize || 0), received: 0, status: 'started', sha256: null, created_at: createdAt, updated_at: createdAt };
+    const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: parsedSize, received: 0, status: 'started', sha256: null, created_at: createdAt, updated_at: createdAt };
     saveTransferMeta(token, transferId, meta);
 
     if (Number(totalSize) > 0) {
@@ -360,62 +390,38 @@ app.post('/upload/chunk', async (req, res) => {
     if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
     const tmpPath = path.join(tokenDir, `transfer-${transferId}.tmp`);
 
-    // open file descriptor for writing at specific offsets
     const fd = await fs.promises.open(tmpPath, 'r+');
-
-    // we'll stream incoming request and write in pieces to file at moving position
     let position = offset;
     const hash = crypto.createHash('sha256');
     let totalBytes = 0;
 
-    // enforce per-request size by counting bytes and failing if too large
-    req.on('data', (chunk) => {
-      totalBytes += chunk.length;
-      if (totalBytes > CHUNK_LIMIT_BYTES) {
-        // destroy request and FD
-        try { fd.close(); } catch (e) {}
-        req.destroy();
+    try {
+      for await (const chunk of req) {
+        totalBytes += chunk.length;
+        if (totalBytes > CHUNK_LIMIT_BYTES) {
+          return res.status(413).json({ error: `chunk exceeds limit (${CHUNK_LIMIT_BYTES} bytes)` });
+        }
+        hash.update(chunk);
+        await fd.write(chunk, 0, chunk.length, position);
+        position += chunk.length;
       }
-    });
-
-    // sequentially write buffers as they arrive (note: writes are queued and order preserved)
-    req.on('data', (chunk) => {
-      hash.update(chunk);
-      // use fs.write with position to avoid buffering entire chunk
-      // don't await here; collect promises to ensure finish
-      fs.write(fd.fd, chunk, 0, chunk.length, position, (err, written) => {
-        if (err) console.error('write error', err);
-      });
-      position += chunk.length;
-    });
-
-    req.on('end', async () => {
-      try {
-        await fd.close();
-      } catch (e) {}
-
-      // verify chunk sha if provided
-      const actualSha = hash.digest('hex');
-      if (chunkSha && actualSha !== chunkSha) {
-        return res.status(400).json({ error: 'chunk sha mismatch', actualSha });
-      }
-
-      // update transfer meta persisted
-      const meta = loadTransferMeta(token, transferId) || { id: transferId, received: 0 };
-      meta.received = (meta.received || 0) + totalBytes;
-      meta.updated_at = now();
-      saveTransferMeta(token, transferId, meta);
-
-      uploadsReceivedBytes.inc(totalBytes);
-
-      return res.json({ ok: true, transferId, offsetReceived: offset, bytes: totalBytes, chunkSha: actualSha });
-    });
-
-    req.on('error', async (err) => {
+    } finally {
       try { await fd.close(); } catch (e) {}
-      console.error('request stream error', err);
-      return res.status(500).json({ error: 'stream error' });
-    });
+    }
+
+    const actualSha = hash.digest('hex');
+    if (chunkSha && actualSha !== chunkSha) {
+      return res.status(400).json({ error: 'chunk sha mismatch', actualSha });
+    }
+
+    const meta = loadTransferMeta(token, transferId) || { id: transferId, received: 0 };
+    meta.received = (meta.received || 0) + totalBytes;
+    meta.updated_at = now();
+    saveTransferMeta(token, transferId, meta);
+
+    uploadsReceivedBytes.inc(totalBytes);
+
+    return res.json({ ok: true, transferId, offsetReceived: offset, bytes: totalBytes, chunkSha: actualSha });
 
   } catch (err) {
     console.error('upload/chunk error', err);
@@ -530,7 +536,16 @@ wss.on('connection', (ws, req) => {
     } catch (e) {}
   }, 30 * 1000);
 
-  ws.on('close', () => clearInterval(pingInterval));
+  ws.on('close', () => {
+    clearInterval(pingInterval);
+    if (ws._meta && ws._meta.token && ws._meta.role === 'host') {
+      const cur = hostsByToken.get(ws._meta.token);
+      if (cur === ws) hostsByToken.delete(ws._meta.token);
+    }
+    if (ws._meta && ws._meta.token && ws._meta.role === 'sender') {
+      removeSenderSocket(ws._meta.token, ws);
+    }
+  });
   ws.on('error', (err) => console.warn('ws error', err && err.message));
 
   ws.on('message', async (data, isBinary) => {
@@ -571,18 +586,36 @@ wss.on('connection', (ws, req) => {
       if (!token || !code || !transferId) return ws.send(JSON.stringify({ type: 'error', message: 'init requires token, code, transferId' }));
       const conn = Array.from(connections.values()).find(c => c.code === code && c.token === token);
       if (!conn) return ws.send(JSON.stringify({ type: 'error', message: 'invalid code or token' }));
+      const parsedSize = Number(totalSize || 0);
+      if (!Number.isFinite(parsedSize) || parsedSize <= 0 || parsedSize > MAX_TRANSFER_BYTES) {
+        return ws.send(JSON.stringify({ type: 'error', message: `file exceeds max limit (${MAX_TRANSFER_BYTES} bytes)` }));
+      }
+      const authLetters = normalizeAuthLetters(msg.authLetters);
+      if (!authLetters) {
+        return ws.send(JSON.stringify({ type: 'error', message: 'missing auth letters' }));
+      }
 
       let tmap = transfersCache.get(token);
       if (!tmap) { tmap = new Map(); transfersCache.set(token, tmap); }
       if (tmap.size >= MAX_ACTIVE_TRANSFERS) return ws.send(JSON.stringify({ type: 'error', message: 'too many active transfers' }));
 
       ws._meta.role = 'sender'; ws._meta.token = token; ws._meta.currentTransferId = transferId;
-      let transferMeta = { transferId, filename: sanitizeFilename(filename || `upload-${Date.now()}`), totalSize: totalSize || 0, received: 0, startedAt: now(), wantP2P: !!wantP2P };
+      addSenderSocket(token, ws);
+      let transferMeta = {
+        transferId,
+        filename: sanitizeFilename(filename || `upload-${Date.now()}`),
+        totalSize: parsedSize,
+        received: 0,
+        startedAt: now(),
+        wantP2P: !!wantP2P,
+        auth: { letters: authLetters, status: 'pending' }
+      };
       tmap.set(transferId, transferMeta);
 
       const hostWs = hostsByToken.get(token);
       if (hostWs && hostWs.readyState === hostWs.OPEN) {
-        hostWs.send(JSON.stringify({ type: 'start', transferId, filename: transferMeta.filename, totalSize: transferMeta.totalSize }));
+        hostWs.send(JSON.stringify({ type: 'start', transferId, filename: transferMeta.filename, totalSize: transferMeta.totalSize, authLetters }));
+        ws.send(JSON.stringify({ type: 'auth-pending', transferId }));
       } else {
         const tokenDir = path.join(UPLOADS_DIR, token);
         if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
@@ -591,9 +624,9 @@ wss.on('connection', (ws, req) => {
           const stream = fs.createWriteStream(outPath, { flags: 'w', highWaterMark: 4 * 1024 * 1024 });
           ws._meta.stream = stream;
         } catch (e) { console.warn('create stream failed', e); }
+        transferMeta.auth.status = 'skipped';
+        ws.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
       }
-
-      ws.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
       return;
     }
 
@@ -620,6 +653,38 @@ wss.on('connection', (ws, req) => {
       const hostWs = hostsByToken.get(token);
       if (ws._meta.role === 'host') {
         const sset = sendersByToken.get(token);
+        if (action === 'auth-approved' || action === 'auth-rejected') {
+          const transferId = msg.transferId;
+          const tmap = transfersCache.get(token);
+          const tmeta = tmap && transferId ? tmap.get(transferId) : null;
+          if (!tmeta) return ws.send(JSON.stringify({ type: 'error', message: 'transfer not found' }));
+
+          if (action === 'auth-approved') {
+            tmeta.auth = { ...(tmeta.auth || {}), status: 'approved' };
+            if (sset) {
+              for (const s of sset) {
+                if (s._meta && s._meta.currentTransferId === transferId && s.readyState === s.OPEN) {
+                  try {
+                    s.send(JSON.stringify({ type: 'auth-approved', transferId }));
+                    s.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
+                  } catch (e) {}
+                }
+              }
+            }
+          } else {
+            tmeta.auth = { ...(tmeta.auth || {}), status: 'rejected' };
+            if (sset) {
+              for (const s of sset) {
+                if (s._meta && s._meta.currentTransferId === transferId && s.readyState === s.OPEN) {
+                  try {
+                    s.send(JSON.stringify({ type: 'auth-rejected', transferId, message: 'receiver rejected authentication' }));
+                  } catch (e) {}
+                }
+              }
+            }
+          }
+        }
+
         if (sset) for (const s of sset) try { s.send(JSON.stringify(msg)); } catch (e) {}
         ws.send(JSON.stringify({ type: 'ack', message: `host->control ${action}` }));
       } else {
