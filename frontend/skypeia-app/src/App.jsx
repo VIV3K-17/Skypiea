@@ -5,6 +5,8 @@ import "./App.css";
 import { ConnectedIcon, DisconnectedIcon } from "./components/ConnectionIcons";
 import Ribbons from "./components/Ribbons";
 import { SiBluesky } from "react-icons/si";
+import { FaFeatherAlt } from "react-icons/fa";
+import { GiHeavyHelm } from "react-icons/gi";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
@@ -30,6 +32,10 @@ const WS_BASE = `${WS_SCHEME}://${new URL(API_BASE).host}`;
 const MAX_TRANSFER_BYTES = 5 * 1024 * 1024 * 1024;
 const WS_CHUNK_BYTES = 4 * 1024 * 1024;
 const WS_BUFFER_HIGH_WATER = 16 * 1024 * 1024;
+const CHAT_MAX_LINES = 1000;
+const CHAT_MODE = { FEATHER: "feather", BOULDER: "boulder" };
+const CHAT_MODE_STORAGE_KEY = "skypiea_chat_mode";
+const CHAT_STORAGE_PREFIX = "skypiea_chat_history";
 
 const RECEIVE_OPTION = { CODE: "code", QR: "qr" };
 const HOST_STEPS = { CONFIGURE: "configure", DISPLAY_CODE: "display_code" };
@@ -67,6 +73,17 @@ function formatBytes(n) {
   const exp = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const value = size / Math.pow(1024, exp);
   return `${value.toFixed(exp === 0 ? 0 : exp === 1 ? 1 : 2)} ${units[exp]}`;
+}
+
+function lineCountOfText(text) {
+  const normalized = String(text == null ? "" : text).replace(/\r\n/g, "\n");
+  if (!normalized.length) return 1;
+  return normalized.split("\n").length;
+}
+
+function lineCountOfMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) return 0;
+  return messages.reduce((acc, msg) => acc + lineCountOfText(msg?.text || ""), 0);
 }
 
 /* ===== ConnectedPanel (in-file) ===== */
@@ -167,6 +184,95 @@ function ConnectedPanel(props) {
   );
 }
 /* ===== end ConnectedPanel ===== */
+
+function ChatPanel({
+  visible,
+  onClose,
+  mode,
+  isConnected,
+  lineCount,
+  maxLines,
+  messages,
+  draft,
+  chatError,
+  onModeChange,
+  onDraftChange,
+  onSend,
+  onDraftKeyDown,
+  onDeleteHistory,
+}) {
+  if (!visible) return null;
+
+  return (
+    <div className="card animate-in chat-card" aria-live="polite">
+      <div className="chat-head">
+        <div className="chat-title-wrap">
+          <h2>Direct Chat</h2>
+          <span className={`chat-connection-dot ${isConnected ? "online" : "offline"}`}>
+            {isConnected ? "Connected" : "Disconnected"}
+          </span>
+        </div>
+
+        <button type="button" className="chat-close-btn" onClick={onClose} aria-label="Close chat">
+          Close
+        </button>
+
+        <div className="chat-mode-switch" role="radiogroup" aria-label="Chat persistence mode">
+          <button
+            type="button"
+            className={`chat-mode-btn ${mode === CHAT_MODE.FEATHER ? "active" : ""}`}
+            role="radio"
+            aria-checked={mode === CHAT_MODE.FEATHER}
+            onClick={() => onModeChange(CHAT_MODE.FEATHER)}
+          >
+            <FaFeatherAlt style={{ marginRight: 6, verticalAlign: "middle" }} />
+            Feather
+          </button>
+          <button
+            type="button"
+            className={`chat-mode-btn ${mode === CHAT_MODE.BOULDER ? "active" : ""}`}
+            role="radio"
+            aria-checked={mode === CHAT_MODE.BOULDER}
+            onClick={() => onModeChange(CHAT_MODE.BOULDER)}
+          >
+            <GiHeavyHelm style={{ marginRight: 6, verticalAlign: "middle" }} />
+            Boulder
+          </button>
+        </div>
+      </div>
+
+      <div className="chat-meta-row">
+        <span>{lineCount}/{maxLines} lines used</span>
+        <button type="button" className="chat-delete" onClick={onDeleteHistory}>Delete History</button>
+      </div>
+
+      <div className="chat-thread" role="log" aria-label="Chat messages">
+        {!messages.length && <div className="chat-empty">No messages yet. Start a conversation.</div>}
+        {messages.map((msg) => (
+          <div key={msg.id} className={`chat-bubble ${msg.sender === "self" ? "self" : "peer"}`}>
+            <div className="chat-bubble-text">{msg.text}</div>
+            <div className="chat-bubble-time">{new Date(msg.ts || Date.now()).toLocaleTimeString()}</div>
+          </div>
+        ))}
+      </div>
+
+      {chatError && <div className="chat-error">{chatError}</div>}
+
+      <div className="chat-compose">
+        <textarea
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={onDraftKeyDown}
+          placeholder="Type a message. Press Enter to send, Shift+Enter for newline."
+          rows={3}
+        />
+        <button type="button" className="primary" onClick={onSend} disabled={!isConnected || !String(draft || "").trim()}>
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ScannerModal({ open, onClose, onDetected }) {
   const videoRef = useRef(null);
@@ -542,6 +648,7 @@ export default function App() {
   // Refs for websockets/chunks
   const wsRef = useRef(null);
   const hostWsRef = useRef(null);
+  const senderChatWsRef = useRef(null);
   const hostChunksRef = useRef({ chunks: [], received: 0, total: 0, filename: "" });
   const pausedRef = useRef(false);
   const stoppedRef = useRef(false);
@@ -557,6 +664,20 @@ export default function App() {
   const speedWindowRef = useRef({ at: 0, bytes: 0 });
 
   const [showTechDetails, setShowTechDetails] = useState(false);
+
+  const [chatMode, setChatMode] = useState(CHAT_MODE.FEATHER);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatError, setChatError] = useState("");
+  const [chatLineCount, setChatLineCount] = useState(0);
+  const seenChatIdsRef = useRef(new Set());
+  const chatPanelAnchorRef = useRef(null);
+
+  const activeChatToken = (mode === "receive" ? connection?.token : resolved?.token) || "";
+  const activeChatCode = (mode === "receive" ? connection?.code : resolved?.code) || "";
+  const activeChatStorageKey =
+    activeChatToken && activeChatCode ? `${CHAT_STORAGE_PREFIX}_${activeChatToken}_${activeChatCode}` : "";
 
   // confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -593,6 +714,205 @@ export default function App() {
     if (!name) return true;
     return /^[a-zA-Z0-9-_]+$/.test(name);
   };
+
+  const getActiveChatSocket = () => {
+    if (mode === "receive") {
+      if (hostWsRef.current && hostWsRef.current.readyState === WebSocket.OPEN) return hostWsRef.current;
+      return null;
+    }
+    if (senderChatWsRef.current && senderChatWsRef.current.readyState === WebSocket.OPEN) return senderChatWsRef.current;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return wsRef.current;
+    return null;
+  };
+
+  const ingestChatMessage = (payload) => {
+    if (!payload) return;
+    const incomingId = String(payload.msgId || payload.id || `${payload.ts || Date.now()}-${Math.random()}`);
+    if (seenChatIdsRef.current.has(incomingId)) return;
+
+    const text = String(payload.text || "").trim();
+    if (!text) return;
+    const incomingLines = lineCountOfText(text);
+
+    setChatMessages((prev) => {
+      const nextLineCount = lineCountOfMessages(prev) + incomingLines;
+      if (nextLineCount > CHAT_MAX_LINES) {
+        setChatError("Chat reached the 1000-line cap. Delete history or switch to Feather for fresh chat.");
+        return prev;
+      }
+
+      seenChatIdsRef.current.add(incomingId);
+      const senderRole = String(payload.senderRole || "").toLowerCase();
+      const selfRole = mode === "receive" ? "host" : "sender";
+      const sender = senderRole === selfRole || payload.sender === "self" ? "self" : "peer";
+      return [...prev, { id: incomingId, text, ts: Number(payload.ts) || Date.now(), sender }];
+    });
+  };
+
+  const openSenderChatSocket = (token) => {
+    if (!token) return;
+    try {
+      if (senderChatWsRef.current && senderChatWsRef.current.readyState === WebSocket.OPEN) {
+        senderChatWsRef.current.close();
+      }
+    } catch (e) {
+      console.error("senderChatWs close error:", e);
+    }
+
+    const socket = new WebSocket(`${WS_BASE}/ws`);
+    socket.onopen = () => {
+      try {
+        socket.send(JSON.stringify({ type: "sender-register", token }));
+      } catch (e) {
+        console.error("sender-register send error:", e);
+      }
+    };
+    socket.onmessage = (ev) => {
+      if (typeof ev.data !== "string") return;
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch (e) {
+        return;
+      }
+      if (msg.type === "chat-message") {
+        ingestChatMessage(msg);
+      }
+    };
+    socket.onerror = (e) => {
+      console.error("sender chat websocket error:", e);
+    };
+    socket.onclose = () => {
+      if (senderChatWsRef.current === socket) senderChatWsRef.current = null;
+    };
+    senderChatWsRef.current = socket;
+  };
+
+  const sendChatMessage = () => {
+    const text = String(chatDraft || "").trim();
+    if (!text) return;
+    if (!activeChatToken) {
+      setChatError("Create or resolve a connection before sending chat.");
+      return;
+    }
+
+    const socket = getActiveChatSocket();
+    if (!socket) {
+      setChatError("Chat socket is offline. Connect both users first.");
+      return;
+    }
+
+    const incomingLines = lineCountOfText(text);
+    const nextLineCount = lineCountOfMessages(chatMessages) + incomingLines;
+    if (nextLineCount > CHAT_MAX_LINES) {
+      setChatError("This message exceeds the 1000-line cap. Delete history before continuing.");
+      return;
+    }
+
+    const msgId = `m-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ts = Date.now();
+    seenChatIdsRef.current.add(msgId);
+    setChatMessages((prev) => [...prev, { id: msgId, text, ts, sender: "self" }]);
+    setChatDraft("");
+    setChatError("");
+
+    try {
+      socket.send(JSON.stringify({ type: "chat-message", token: activeChatToken, text, ts, msgId }));
+    } catch (e) {
+      console.error("chat send failed:", e);
+      setChatError("Failed to send message. Try again.");
+    }
+  };
+
+  const handleChatDraftKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  };
+
+  const clearChatHistory = () => {
+    setChatMessages([]);
+    setChatLineCount(0);
+    setChatError("");
+    seenChatIdsRef.current = new Set();
+    if (activeChatStorageKey) localStorage.removeItem(activeChatStorageKey);
+  };
+
+  const openChatMode = () => {
+    if (!activeChatToken || !activeChatCode) {
+      setChatError("Generate or resolve a connection first, then open chat.");
+      return;
+    }
+    setChatOpen(true);
+    requestAnimationFrame(() => {
+      try {
+        chatPanelAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {}
+    });
+  };
+
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+      if (savedMode === CHAT_MODE.BOULDER || savedMode === CHAT_MODE.FEATHER) {
+        setChatMode(savedMode);
+      }
+    } catch (e) {
+      console.error("chat mode load failed:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode);
+    } catch (e) {
+      console.error("chat mode save failed:", e);
+    }
+  }, [chatMode]);
+
+  useEffect(() => {
+    if (!activeChatStorageKey) {
+      setChatMessages([]);
+      setChatLineCount(0);
+      seenChatIdsRef.current = new Set();
+      setChatOpen(false);
+      return;
+    }
+
+    if (chatMode === CHAT_MODE.BOULDER) {
+      try {
+        const raw = localStorage.getItem(activeChatStorageKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(parsed) ? parsed : [];
+        setChatMessages(list);
+        setChatLineCount(lineCountOfMessages(list));
+        seenChatIdsRef.current = new Set(list.map((m) => m.id).filter(Boolean));
+      } catch (e) {
+        console.error("chat history load failed:", e);
+        setChatMessages([]);
+        setChatLineCount(0);
+        seenChatIdsRef.current = new Set();
+      }
+    } else {
+      setChatMessages([]);
+      setChatLineCount(0);
+      seenChatIdsRef.current = new Set();
+    }
+  }, [activeChatStorageKey, chatMode]);
+
+  useEffect(() => {
+    const lc = lineCountOfMessages(chatMessages);
+    setChatLineCount(lc);
+
+    if (chatMode === CHAT_MODE.BOULDER && activeChatStorageKey) {
+      try {
+        localStorage.setItem(activeChatStorageKey, JSON.stringify(chatMessages));
+      } catch (e) {
+        console.error("chat history save failed:", e);
+      }
+    }
+  }, [chatMessages, chatMode, activeChatStorageKey]);
 
   // helpers
   async function createFolderOnServer(name) {
@@ -694,6 +1014,10 @@ export default function App() {
                 m = JSON.parse(ev.data);
               } catch (parseErr) {
                 console.error("Failed to parse host WS message", parseErr);
+                return;
+              }
+              if (m.type === "chat-message") {
+                ingestChatMessage(m);
                 return;
               }
               if (m.type === "start") {
@@ -810,6 +1134,7 @@ export default function App() {
       const persona = profileForKey(j.connectionData.code || j.connectionData.token);
       setResolved({ ...j.connectionData, persona });
       logMsg("Resolved code to connection info.");
+      openSenderChatSocket(j.connectionData.token);
       setReceiveStep(RECEIVE_STEPS.SEND_FILE);
     } catch (e) {
       console.error(e);
@@ -862,7 +1187,9 @@ export default function App() {
       ws.onmessage = async (ev) => {
         if (typeof ev.data === "string") {
           const msg = JSON.parse(ev.data);
-          if (msg.type === "offset") {
+          if (msg.type === "chat-message") {
+            ingestChatMessage(msg);
+          } else if (msg.type === "offset") {
             const chunkSize = WS_CHUNK_BYTES;
             let pos = msg.offset || 0;
             try {
@@ -1003,6 +1330,11 @@ export default function App() {
       } catch (e) {
         console.error("Error closing hostWsRef on unmount:", e);
       }
+      try {
+        if (senderChatWsRef.current?.readyState === WebSocket.OPEN) senderChatWsRef.current.close();
+      } catch (e) {
+        console.error("Error closing senderChatWsRef on unmount:", e);
+      }
       
       // Clear connection timeout
       if (connectionTimeoutRef.current) {
@@ -1019,6 +1351,21 @@ export default function App() {
       setScannedText("");
     }
   }, [receiveOption]);
+
+  useEffect(() => {
+    if (mode !== "send" || !resolved?.token) {
+      try {
+        if (senderChatWsRef.current?.readyState === WebSocket.OPEN) senderChatWsRef.current.close();
+      } catch (e) {
+        console.error("senderChatWs close error:", e);
+      }
+      return;
+    }
+
+    if (!senderChatWsRef.current || senderChatWsRef.current.readyState !== WebSocket.OPEN) {
+      openSenderChatSocket(resolved.token);
+    }
+  }, [mode, resolved?.token]);
 
   // ------- Scanner integration -------
   const handleScannerDetected = (payload) => {
@@ -1297,6 +1644,9 @@ export default function App() {
     const m = progress.match(/(\d+)%/);
     progressNumber = m ? Number(m[1]) : progress === "Done" || progress === "Done!" ? 100 : 0;
   } else if (typeof progress === "number") progressNumber = progress;
+
+  const hasChatContext = Boolean(activeChatToken && activeChatCode);
+  const chatSocketOpen = Boolean(getActiveChatSocket());
 
   const ribbonElement = (
     <div className="preview-inner" aria-hidden>
@@ -1638,6 +1988,24 @@ export default function App() {
                   </div>
                 )}
 
+                <div ref={chatPanelAnchorRef} />
+                <ChatPanel
+                  visible={hasChatContext && chatOpen}
+                  onClose={() => setChatOpen(false)}
+                  mode={chatMode}
+                  isConnected={chatSocketOpen}
+                  lineCount={chatLineCount}
+                  maxLines={CHAT_MAX_LINES}
+                  messages={chatMessages}
+                  draft={chatDraft}
+                  chatError={chatError}
+                  onModeChange={setChatMode}
+                  onDraftChange={setChatDraft}
+                  onSend={sendChatMessage}
+                  onDraftKeyDown={handleChatDraftKeyDown}
+                  onDeleteHistory={clearChatHistory}
+                />
+
                 {/* NEW: Transmission Constraints card placed above the log to match theme */}
                 <div className="constraints-card">
   <h4>Transmission Constraints</h4>
@@ -1792,6 +2160,20 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {hasChatContext && !chatOpen && (
+        <button
+          type="button"
+          className="chat-fab"
+          onClick={openChatMode}
+          aria-label="Open chat mode"
+        >
+          <span className="chat-fab-icon">
+            {chatMode === CHAT_MODE.FEATHER ? <FaFeatherAlt /> : <GiHeavyHelm />}
+          </span>
+          <span className="chat-fab-label">Open Chat</span>
+        </button>
+      )}
 
       {/* modals and overlays remain sibling to main (so they can overlay correctly) */}
       <ScannerModal open={openScanner} onClose={() => setOpenScanner(false)} onDetected={handleScannerDetected} />
