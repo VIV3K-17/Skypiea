@@ -35,7 +35,6 @@ const WS_BUFFER_HIGH_WATER = 16 * 1024 * 1024;
 const CHAT_MAX_LINES = 1000;
 const CHAT_MODE = { FEATHER: "feather", BOULDER: "boulder" };
 const CHAT_MODE_STORAGE_KEY = "skypiea_chat_mode";
-const CHAT_STORAGE_PREFIX = "skypiea_chat_history";
 
 const RECEIVE_OPTION = { CODE: "code", QR: "qr" };
 const HOST_STEPS = { CONFIGURE: "configure", DISPLAY_CODE: "display_code" };
@@ -328,7 +327,6 @@ function ChatPanel({
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={onDraftKeyDown}
-          placeholder="Type a message. Press Enter to send, Shift+Enter for newline."
           rows={3}
         />
         <button type="button" className="primary" onClick={onSend} disabled={!isConnected || !String(draft || "").trim()}>
@@ -733,23 +731,18 @@ export default function App() {
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
   const [chatLineCount, setChatLineCount] = useState(0);
+  const [chatOpen, setChatOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState("connect");
   const seenChatIdsRef = useRef(new Set());
-  const chatPanelAnchorRef = useRef(null);
 
   const activeChatToken = (mode === "receive" ? connection?.token : resolved?.token) || "";
   const activeChatCode = (mode === "receive" ? connection?.code : resolved?.code) || "";
-  const activeChatStorageKey =
-    activeChatToken && activeChatCode ? `${CHAT_STORAGE_PREFIX}_${activeChatToken}_${activeChatCode}` : "";
+  const activeChatSessionKey = activeChatToken && activeChatCode ? `${activeChatToken}_${activeChatCode}` : "";
   const participantProfiles = participantProfilesForSession(activeChatToken || activeChatCode || "skypiea-session");
   const senderDisplayName = participantProfiles.sender.name;
   const receiverDisplayName = participantProfiles.receiver.name;
-  const localChatName = mode === "send"
-    ? `${participantProfiles.sender.name} (Sender)`
-    : `${participantProfiles.receiver.name} (Receiver)`;
-  const peerChatName = mode === "send"
-    ? `${participantProfiles.receiver.name} (Receiver)`
-    : `${participantProfiles.sender.name} (Sender)`;
+  const localChatName = mode === "send" ? participantProfiles.sender.name : participantProfiles.receiver.name;
+  const peerChatName = mode === "send" ? participantProfiles.receiver.name : participantProfiles.sender.name;
 
   // confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -925,7 +918,17 @@ export default function App() {
     setChatLineCount(0);
     setChatError("");
     seenChatIdsRef.current = new Set();
-    if (activeChatStorageKey) localStorage.removeItem(activeChatStorageKey);
+  };
+
+  const closeChatMode = () => {
+    if (chatMode === CHAT_MODE.FEATHER) {
+      clearChatHistory();
+    }
+    setChatOpen(false);
+  };
+
+  const openChatMode = () => {
+    setChatOpen(true);
   };
 
   useEffect(() => {
@@ -948,46 +951,16 @@ export default function App() {
   }, [chatMode]);
 
   useEffect(() => {
-    if (!activeChatStorageKey) {
-      setChatMessages([]);
-      setChatLineCount(0);
-      seenChatIdsRef.current = new Set();
-      return;
-    }
-
-    if (chatMode === CHAT_MODE.BOULDER) {
-      try {
-        const raw = localStorage.getItem(activeChatStorageKey);
-        const parsed = raw ? JSON.parse(raw) : [];
-        const list = Array.isArray(parsed) ? parsed : [];
-        setChatMessages(list);
-        setChatLineCount(lineCountOfMessages(list));
-        seenChatIdsRef.current = new Set(list.map((m) => m.id).filter(Boolean));
-      } catch (e) {
-        console.error("chat history load failed:", e);
-        setChatMessages([]);
-        setChatLineCount(0);
-        seenChatIdsRef.current = new Set();
-      }
-    } else {
-      setChatMessages([]);
-      setChatLineCount(0);
-      seenChatIdsRef.current = new Set();
-    }
-  }, [activeChatStorageKey, chatMode]);
-
-  useEffect(() => {
     const lc = lineCountOfMessages(chatMessages);
     setChatLineCount(lc);
+  }, [chatMessages]);
 
-    if (chatMode === CHAT_MODE.BOULDER && activeChatStorageKey) {
-      try {
-        localStorage.setItem(activeChatStorageKey, JSON.stringify(chatMessages));
-      } catch (e) {
-        console.error("chat history save failed:", e);
-      }
+  useEffect(() => {
+    if (!activeChatSessionKey) {
+      clearChatHistory();
+      setChatOpen(false);
     }
-  }, [chatMessages, chatMode, activeChatStorageKey]);
+  }, [activeChatSessionKey]);
 
   // helpers
   async function createFolderOnServer(name) {
@@ -2046,8 +2019,6 @@ export default function App() {
                   </div>
                 )}
 
-                <div ref={chatPanelAnchorRef} />
-
                 <div className={`log-card mobile-pane ${mobileTab === "logs" ? "is-mobile-active" : ""}`}>
                   <div className="log-head">Transmission Log</div>
                   <pre className="log-area">{log || "No activity yet."}</pre>
@@ -2176,59 +2147,6 @@ export default function App() {
                   )}
                 </div>
 
-                <div className={`mobile-pane ${mobileTab === "chat" ? "is-mobile-active" : ""}`}>
-                  {hasChatContext ? (
-                    <ChatPanel
-                      visible={true}
-                      allowClose={false}
-                      onClose={() => {}}
-                      mode={chatMode}
-                      isConnected={chatSocketOpen}
-                      lineCount={chatLineCount}
-                      maxLines={CHAT_MAX_LINES}
-                      messages={chatMessages}
-                      draft={chatDraft}
-                      chatError={chatError}
-                      onModeChange={setChatMode}
-                      onDraftChange={setChatDraft}
-                      onSend={sendChatMessage}
-                      onDraftKeyDown={handleChatDraftKeyDown}
-                      onDeleteHistory={clearChatHistory}
-                      localUserName={localChatName}
-                      peerUserName={peerChatName}
-                    />
-                  ) : (
-                    <div className="card animate-in chat-card">
-                      <div className="chat-head">
-                        <div className="chat-title-wrap">
-                          <h2>Direct Chat</h2>
-                          <span className="chat-connection-dot offline">Disconnected</span>
-                        </div>
-                      </div>
-                      <div className="chat-mode-switch" role="radiogroup" aria-label="Chat persistence mode">
-                        <button type="button" className="chat-mode-btn active" role="radio" aria-checked="true">
-                          <FaFeatherAlt style={{ marginRight: 6, verticalAlign: "middle" }} />
-                          Feather mode
-                        </button>
-                        <button type="button" className="chat-mode-btn" role="radio" aria-checked="false">
-                          <GiHeavyHelm style={{ marginRight: 6, verticalAlign: "middle" }} />
-                          Boulder mode
-                        </button>
-                      </div>
-                      <div className="chat-meta-row">
-                        <span>0 / 1000 lines used</span>
-                        <button type="button" className="chat-delete" disabled>Delete History</button>
-                      </div>
-                      <div className="chat-thread" role="log" aria-label="Chat messages">
-                        <div className="chat-empty">Connect first to unlock direct chat.</div>
-                      </div>
-                      <div className="chat-compose">
-                        <textarea value="" readOnly placeholder="Waiting for connection..." rows={3} />
-                        <button type="button" className="primary" disabled>Send</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
               </aside>
             </div>
 
@@ -2236,6 +2154,61 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      <button
+        type="button"
+        className="chat-fab"
+        onClick={openChatMode}
+        aria-label="Open chat"
+      >
+        <span className="chat-fab-icon">
+          {chatMode === CHAT_MODE.FEATHER ? <FaFeatherAlt /> : <GiHeavyHelm />}
+        </span>
+        <span className="chat-fab-label">Chat</span>
+      </button>
+
+      {chatOpen && (
+        <div className="chat-dialog-backdrop" onClick={closeChatMode} role="dialog" aria-modal="true" aria-label="Direct chat dialog">
+          <div className="chat-dialog-shell" onClick={(e) => e.stopPropagation()}>
+            {hasChatContext ? (
+              <ChatPanel
+                visible={true}
+                allowClose={true}
+                onClose={closeChatMode}
+                mode={chatMode}
+                isConnected={chatSocketOpen}
+                lineCount={chatLineCount}
+                maxLines={CHAT_MAX_LINES}
+                messages={chatMessages}
+                draft={chatDraft}
+                chatError={chatError}
+                onModeChange={setChatMode}
+                onDraftChange={setChatDraft}
+                onSend={sendChatMessage}
+                onDraftKeyDown={handleChatDraftKeyDown}
+                onDeleteHistory={clearChatHistory}
+                localUserName={localChatName}
+                peerUserName={peerChatName}
+              />
+            ) : (
+              <div className="card animate-in chat-card">
+                <div className="chat-head">
+                  <div className="chat-title-wrap">
+                    <h2>Direct Chat</h2>
+                    <span className="chat-connection-dot offline">Disconnected</span>
+                  </div>
+                  <button type="button" className="chat-close-btn" onClick={closeChatMode} aria-label="Close chat">
+                    Close
+                  </button>
+                </div>
+                <div className="chat-thread" role="log" aria-label="Chat messages">
+                  <div className="chat-empty">Connect sender and receiver first to start direct chat.</div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* modals and overlays remain sibling to main (so they can overlay correctly) */}
       <ScannerModal open={openScanner} onClose={() => setOpenScanner(false)} onDetected={handleScannerDetected} />

@@ -962,6 +962,29 @@ main.main-content {
   letter-spacing: 0.1px;
 }
 
+.chat-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 14, 10, 0.48);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.chat-dialog-shell {
+  width: min(820px, calc(100vw - 32px));
+}
+
+.chat-dialog-shell .chat-card {
+  height: min(78vh, 680px);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(9, 25, 18, 0.35);
+}
+
 @media (max-width: 768px) {
   .chat-head,
   .chat-meta-row {
@@ -998,6 +1021,22 @@ main.main-content {
 
   .chat-fab-label {
     font-size: 12px;
+  }
+
+  .chat-dialog-backdrop {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 8px;
+  }
+
+  .chat-dialog-shell {
+    width: 100%;
+  }
+
+  .chat-dialog-shell .chat-card {
+    width: 100%;
+    height: calc(100vh - 16px);
+    border-radius: 12px;
   }
 }
 

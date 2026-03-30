@@ -67,6 +67,7 @@ const MAX_TMP_FILE_AGE_MS = Number(process.env.MAX_TMP_FILE_AGE_MS || 7 * 24 * 6
 // simple helper dirs for persisted sessions & metadata (no DB)
 const SESSIONS_DIR = path.join(UPLOADS_DIR, '_sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+const RATINGS_FALLBACK_PATH = path.join(UPLOADS_DIR, '_ratings.json');
 
 // ========== Postgres (ratings) ==========
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -83,7 +84,7 @@ if (DATABASE_URL) {
     console.error('Postgres pool error:', err && err.message);
   });
 } else {
-  console.warn('DATABASE_URL not set. /rating endpoints will return unavailable.');
+  console.warn('DATABASE_URL not set. /rating endpoints will use local JSON fallback.');
 }
 
 // ========== Helpers ==========
@@ -127,7 +128,12 @@ function hashIp(ip) {
 }
 
 async function fetchRatingStats() {
-  if (!pgPool) return { avg: null, count: 0 };
+  if (!pgPool) {
+    const rows = readLocalRatings();
+    if (!rows.length) return { avg: null, count: 0 };
+    const total = rows.reduce((acc, r) => acc + Number(r.rating || 0), 0);
+    return { avg: total / rows.length, count: rows.length };
+  }
   try {
     const fromView = await pgPool.query('SELECT total_ratings, avg_rating FROM public.rating_stats LIMIT 1');
     if (fromView.rows.length > 0) {
@@ -141,9 +147,17 @@ async function fetchRatingStats() {
     // If view is unavailable, fallback to direct aggregate below.
   }
 
-  const agg = await pgPool.query('SELECT COUNT(*)::int AS count, AVG(rating)::numeric AS avg FROM public.ratings');
-  const row = agg.rows[0] || { count: 0, avg: null };
-  return { avg: row.avg != null ? Number(row.avg) : null, count: Number(row.count || 0) };
+  try {
+    const agg = await pgPool.query('SELECT COUNT(*)::int AS count, AVG(rating)::numeric AS avg FROM public.ratings');
+    const row = agg.rows[0] || { count: 0, avg: null };
+    return { avg: row.avg != null ? Number(row.avg) : null, count: Number(row.count || 0) };
+  } catch (e) {
+    console.warn('Rating stats DB query failed, using local fallback:', e && e.message);
+    const rows = readLocalRatings();
+    if (!rows.length) return { avg: null, count: 0 };
+    const total = rows.reduce((acc, r) => acc + Number(r.rating || 0), 0);
+    return { avg: total / rows.length, count: rows.length };
+  }
 }
 
 function readJsonSafe(p) {
@@ -151,6 +165,39 @@ function readJsonSafe(p) {
 }
 function writeJsonSafe(p, obj) {
   try { fs.writeFileSync(p, JSON.stringify(obj)); return true; } catch (e) { return false; }
+}
+
+function readLocalRatings() {
+  const content = readJsonSafe(RATINGS_FALLBACK_PATH);
+  if (!Array.isArray(content)) return [];
+  return content.filter((row) => {
+    const rating = Number(row && row.rating);
+    const transferId = String((row && row.transfer_id) || '').trim();
+    return transferId.length > 0 && Number.isInteger(rating) && rating >= 1 && rating <= 5;
+  });
+}
+
+function writeLocalRatings(rows) {
+  return writeJsonSafe(RATINGS_FALLBACK_PATH, rows);
+}
+
+function upsertLocalRating({ transferId, value, reasonTags, comment, ipHash, ua }) {
+  const rows = readLocalRatings();
+  const next = {
+    transfer_id: transferId,
+    rating: value,
+    reason_tags: reasonTags,
+    comment,
+    ip_hash: ipHash,
+    user_agent: ua,
+    updated_at: new Date().toISOString()
+  };
+  const idx = rows.findIndex((r) => String(r.transfer_id) === String(transferId));
+  if (idx >= 0) rows[idx] = { ...rows[idx], ...next };
+  else rows.push(next);
+  if (!writeLocalRatings(rows)) {
+    throw new Error('failed to persist local ratings');
+  }
 }
 
 // ========== In-memory maps (backed by FS) ==========
@@ -236,7 +283,6 @@ app.use('/upload/chunk', uploadChunkLimiter);
 // Ratings API (Postgres-backed)
 app.get('/rating', async (req, res) => {
   try {
-    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
     const stats = await fetchRatingStats();
     return res.json(stats);
   } catch (e) {
@@ -247,8 +293,6 @@ app.get('/rating', async (req, res) => {
 
 app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
   try {
-    if (!pgPool) return res.status(503).json({ error: 'ratings not available' });
-
     const value = Number((req.body && req.body.value) || 0);
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       return res.status(400).json({ error: 'invalid value' });
@@ -270,25 +314,38 @@ app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
     const commentInput = req.body?.comment == null ? null : String(req.body.comment).trim();
     const comment = commentInput && commentInput.length ? commentInput.slice(0, 500) : null;
 
-    await pgPool.query(
-      `INSERT INTO public.transfer_receipts (transfer_id, completed_at)
-       VALUES ($1, NOW())
-       ON CONFLICT (transfer_id) DO NOTHING`,
-      [transferId]
-    );
+    if (pgPool) {
+      try {
+        await pgPool.query(
+          `INSERT INTO public.transfer_receipts (transfer_id, completed_at)
+           VALUES ($1, NOW())
+           ON CONFLICT (transfer_id) DO NOTHING`,
+          [transferId]
+        );
 
-    await pgPool.query(
-      `INSERT INTO public.ratings (transfer_id, rating, reason_tags, comment, ip_hash, user_agent)
-       VALUES ($1, $2, $3::text[], $4, $5, $6)`,
-      [transferId, value, reasonTags, comment, ipHash, ua]
-    );
+        await pgPool.query(
+          `INSERT INTO public.ratings (transfer_id, rating, reason_tags, comment, ip_hash, user_agent)
+           VALUES ($1, $2, $3::text[], $4, $5, $6)
+           ON CONFLICT (transfer_id)
+           DO UPDATE SET
+             rating = EXCLUDED.rating,
+             reason_tags = EXCLUDED.reason_tags,
+             comment = EXCLUDED.comment,
+             ip_hash = EXCLUDED.ip_hash,
+             user_agent = EXCLUDED.user_agent`,
+          [transferId, value, reasonTags, comment, ipHash, ua]
+        );
+      } catch (e) {
+        console.warn('Rating write DB query failed, using local fallback:', e && e.message);
+        upsertLocalRating({ transferId, value, reasonTags, comment, ipHash, ua });
+      }
+    } else {
+      upsertLocalRating({ transferId, value, reasonTags, comment, ipHash, ua });
+    }
 
     const stats = await fetchRatingStats();
     return res.json({ ok: true, ...stats });
   } catch (e) {
-    if (e && e.code === '23505') {
-      return res.status(409).json({ error: 'rating already submitted for this transfer' });
-    }
     console.error('POST /rating failed', e);
     return res.status(500).json({ error: 'server error' });
   }

@@ -11,57 +11,57 @@ const BRAND = {
 
 const features = [
   {
-    title: "Peer-to-peer transfers",
-    summary: "Fast, direct transfers between browsers — private and efficient.",
+    title: "Fast browser transfers",
+    summary: "Send files directly between devices with low setup friction and smooth progress.",
     bullets: [
-      "Browser-to-browser when possible",
-      "Resumable chunked transfers",
-      "Low-latency local connections",
+      "Chunked streaming for large files",
+      "Live progress and speed indicators",
+      "Pause, resume, and stop controls",
     ],
   },
   {
-    title: "Encrypted relay fallback",
-    summary: "When peers can’t connect directly, encrypted relays take over seamlessly.",
+    title: "Reliable connection flow",
+    summary: "Connect quickly with short codes or QR and keep transfers stable across networks.",
     bullets: [
-      "Short-lived ephemeral tokens",
-      "Per-chunk integrity checks",
-      "No long-term persistence",
+      "Code + QR based pairing",
+      "Expiry-aware connection lifecycle",
+      "Fallback-friendly websocket transport",
     ],
   },
   {
-    title: "Quick pairing",
-    summary: "Pair devices instantly with QR or short codes — no logins or accounts.",
+    title: "Integrated direct chat",
+    summary: "Coordinate transfers in real-time with a focused chat experience built into the flow.",
     bullets: [
-      "Mobile QR pairing",
-      "4-digit quick codes",
-      "Instant progress view",
+      "Floating chat button + dialog",
+      "Copyable messages with sender identity",
+      "Feather/Boulder retention modes",
     ],
   },
   {
-    title: "Privacy-first defaults",
-    summary: "We keep no data beyond the transfer itself — total privacy by design.",
+    title: "Privacy-first by default",
+    summary: "Skypiea keeps the transfer journey lightweight with minimal retained data.",
     bullets: [
-      "Automatic cleanup after transfers",
-      "Optional self-hosted relay",
-      "Zero analytics or tracking",
+      "Short-lived session behavior",
+      "Optional history persistence modes",
+      "Simple, transparent controls",
     ],
   },
   {
-    title: "Cross-platform",
-    summary: "Works across browsers — desktop and mobile, no installs needed.",
+    title: "Cross-device ready",
+    summary: "Use desktop and mobile browsers without installs and still keep the same workflow.",
     bullets: [
-      "Chrome / Edge / Firefox / Safari",
-      "Optimized for mobile",
-      "Large-file chunking",
+      "Responsive sender/receiver panels",
+      "Camera QR scanning support",
+      "Consistent UI on small screens",
     ],
   },
   {
-    title: "Developer-friendly",
-    summary: "APIs and SDKs to embed secure transfers in your apps.",
+    title: "Built for iteration",
+    summary: "Clear UX states and modular components make the product easy to evolve.",
     bullets: [
-      "REST APIs for token creation",
-      "Lightweight client SDK",
-      "Webhook events for completion",
+      "Component-driven architecture",
+      "Feature pages for support and privacy",
+      "Clean extension path for future updates",
     ],
   },
 ];
@@ -99,7 +99,7 @@ export default function FeaturesPage() {
               margin: "0 auto",
             }}
           >
-            Explore what makes Skypiea fast, private, and effortless.
+            Explore the current Skypiea experience across transfer, chat, privacy, and reliability.
           </p>
         </section>
 

@@ -225,6 +225,23 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   const API_BASE = "https://skypiea-2.onrender.com";
   const [userRating, setUserRating] = React.useState(null);
   const [hoverRating, setHoverRating] = React.useState(0);
+  const ratingTransferIdRef = React.useRef(null);
+
+  React.useEffect(() => {
+    try {
+      const existing = window.localStorage.getItem("skypiea-rating-id");
+      if (existing) {
+        ratingTransferIdRef.current = existing;
+        return;
+      }
+      const newId = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      window.localStorage.setItem("skypiea-rating-id", newId);
+      ratingTransferIdRef.current = newId;
+    } catch {
+      ratingTransferIdRef.current = `anon-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }, []);
+
   const handleVote = async (n) => {
     if (!n || n < 1 || n > 5) return;
     setUserRating(n);
@@ -232,7 +249,10 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
       await fetch(`${API_BASE}/rating`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ value: n })
+        body: JSON.stringify({
+          value: n,
+          transferId: ratingTransferIdRef.current || undefined
+        })
       });
     } catch {
       // Preserve selected stars even if network submit fails.
