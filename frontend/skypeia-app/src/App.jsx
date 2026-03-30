@@ -1,5 +1,5 @@
 ﻿﻿// App.jsx — merged version with in-file ConnectedPanel and full app logic
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import "./App.css";
 import { ConnectedIcon, DisconnectedIcon } from "./components/ConnectionIcons";
@@ -66,6 +66,18 @@ function profileForKey(key) {
   return PRESET_PROFILES[hashStringToIndex(String(key || ""))];
 }
 
+function participantProfilesForSession(seed) {
+  const senderIdx = hashStringToIndex(`${seed}-sender`);
+  let receiverIdx = hashStringToIndex(`${seed}-receiver`);
+  if (receiverIdx === senderIdx) {
+    receiverIdx = (receiverIdx + 1) % PRESET_PROFILES.length;
+  }
+  return {
+    sender: PRESET_PROFILES[senderIdx],
+    receiver: PRESET_PROFILES[receiverIdx],
+  };
+}
+
 function formatBytes(n) {
   const size = Number(n || 0);
   if (!Number.isFinite(size) || size <= 0) return "0 B";
@@ -93,8 +105,6 @@ function ConnectedPanel(props) {
     note,
     ip,
     port,
-    showTechDetails,
-    onToggleTech,
     file,
     onFileChange,
     onStart,
@@ -126,9 +136,11 @@ function ConnectedPanel(props) {
       }}
     >
       <span style={{ fontSize: 18, lineHeight: 1 }}>{persona?.emoji || "🟢"}</span>
-      <span style={{ fontWeight: 600, color: "#2b463c" }}>{persona?.name || "Peer"}</span>
+      <span style={{ fontWeight: 600, color: "#2b463c" }}>{persona?.name || "Receiver"}</span>
     </div>
   );
+
+  const hasIpOrPort = Boolean(ip || port);
 
   return (
     <div className="connection-box connected-panel" style={{ marginTop: 12 }}>
@@ -143,23 +155,20 @@ function ConnectedPanel(props) {
           </span>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button className="linklike" onClick={onToggleTech} aria-expanded={!!showTechDetails} style={{ fontSize: 13 }}>
-            {showTechDetails ? "Hide technical details" : "Show technical details"}
-          </button>
-        </div>
       </div>
 
       {note && <p className="note" style={{ marginTop: 8 }}>{note}</p>}
 
-      {showTechDetails && (
+      {hasIpOrPort && (
         <div className="muted tech-details" style={{ marginTop: 8 }}>
           <div style={{ display: "flex", gap: 12 }}>
-            <div>IP: <strong>{ip || "—"}</strong></div>
-            <div>Port: <strong>{port || "—"}</strong></div>
+            {ip && <div>IP: <strong>{ip}</strong></div>}
+            {port && <div>Port: <strong>{port}</strong></div>}
           </div>
         </div>
       )}
+
+      {note && <p className="note" style={{ marginTop: 8 }}>{note}</p>}
 
       <div className="file-select-row" style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
         <label className="file-chooser" style={{ cursor: disabled ? "not-allowed" : "pointer" }}>
@@ -188,6 +197,7 @@ function ConnectedPanel(props) {
 function ChatPanel({
   visible,
   onClose,
+  allowClose = true,
   mode,
   isConnected,
   lineCount,
@@ -200,7 +210,44 @@ function ChatPanel({
   onSend,
   onDraftKeyDown,
   onDeleteHistory,
+  localUserName,
+  peerUserName,
 }) {
+  const [copiedMsgId, setCopiedMsgId] = useState("");
+  const threadRef = useRef(null);
+
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  const copyMessageText = async (msg) => {
+    const text = String(msg?.text || "");
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopiedMsgId(String(msg.id));
+      setTimeout(() => {
+        setCopiedMsgId((prev) => (prev === String(msg.id) ? "" : prev));
+      }, 1200);
+    } catch (e) {
+      console.error("copy message failed:", e);
+    }
+  };
+
   if (!visible) return null;
 
   return (
@@ -213,45 +260,63 @@ function ChatPanel({
           </span>
         </div>
 
-        <button type="button" className="chat-close-btn" onClick={onClose} aria-label="Close chat">
-          Close
-        </button>
-
-        <div className="chat-mode-switch" role="radiogroup" aria-label="Chat persistence mode">
-          <button
-            type="button"
-            className={`chat-mode-btn ${mode === CHAT_MODE.FEATHER ? "active" : ""}`}
-            role="radio"
-            aria-checked={mode === CHAT_MODE.FEATHER}
-            onClick={() => onModeChange(CHAT_MODE.FEATHER)}
-          >
-            <FaFeatherAlt style={{ marginRight: 6, verticalAlign: "middle" }} />
-            Feather
+        {allowClose && (
+          <button type="button" className="chat-close-btn" onClick={onClose} aria-label="Close chat">
+            Close
           </button>
-          <button
-            type="button"
-            className={`chat-mode-btn ${mode === CHAT_MODE.BOULDER ? "active" : ""}`}
-            role="radio"
-            aria-checked={mode === CHAT_MODE.BOULDER}
-            onClick={() => onModeChange(CHAT_MODE.BOULDER)}
-          >
-            <GiHeavyHelm style={{ marginRight: 6, verticalAlign: "middle" }} />
-            Boulder
-          </button>
-        </div>
+        )}
       </div>
 
       <div className="chat-meta-row">
-        <span>{lineCount}/{maxLines} lines used</span>
+        <div className="chat-meta-left">
+          <div className="chat-mode-switch" role="radiogroup" aria-label="Chat persistence mode">
+            <button
+              type="button"
+              className={`chat-mode-btn ${mode === CHAT_MODE.FEATHER ? "active" : ""}`}
+              role="radio"
+              aria-checked={mode === CHAT_MODE.FEATHER}
+              onClick={() => onModeChange(CHAT_MODE.FEATHER)}
+            >
+              <FaFeatherAlt style={{ marginRight: 6, verticalAlign: "middle" }} />
+              Feather
+            </button>
+            <button
+              type="button"
+              className={`chat-mode-btn ${mode === CHAT_MODE.BOULDER ? "active" : ""}`}
+              role="radio"
+              aria-checked={mode === CHAT_MODE.BOULDER}
+              onClick={() => onModeChange(CHAT_MODE.BOULDER)}
+            >
+              <GiHeavyHelm style={{ marginRight: 6, verticalAlign: "middle" }} />
+              Boulder
+            </button>
+          </div>
+          <span className="chat-line-count">{lineCount}/{maxLines} lines</span>
+        </div>
         <button type="button" className="chat-delete" onClick={onDeleteHistory}>Delete History</button>
       </div>
 
-      <div className="chat-thread" role="log" aria-label="Chat messages">
+      <div ref={threadRef} className="chat-thread" role="log" aria-label="Chat messages">
         {!messages.length && <div className="chat-empty">No messages yet. Start a conversation.</div>}
         {messages.map((msg) => (
-          <div key={msg.id} className={`chat-bubble ${msg.sender === "self" ? "self" : "peer"}`}>
+          <div
+            key={msg.id}
+            className={`chat-bubble ${msg.sender === "self" ? "self" : msg.sender === "system" ? "system" : "peer"}`}
+          >
+            <div className="chat-bubble-head">
+              <span className="chat-bubble-author">
+                {msg.sender === "self" ? localUserName : msg.sender === "system" ? "System" : peerUserName}
+              </span>
+              <button
+                type="button"
+                className="chat-copy-btn"
+                aria-label="Copy message"
+                onClick={() => copyMessageText(msg)}
+              >
+                {copiedMsgId === String(msg.id) ? "Copied" : "Copy"}
+              </button>
+            </div>
             <div className="chat-bubble-text">{msg.text}</div>
-            <div className="chat-bubble-time">{new Date(msg.ts || Date.now()).toLocaleTimeString()}</div>
           </div>
         ))}
       </div>
@@ -629,7 +694,6 @@ export default function App() {
   const [hostFolder, setHostFolder] = useState("");
   const [availableFolders, setAvailableFolders] = useState([]);
   const [newFolderName, setNewFolderName] = useState("");
-  const [note, setNote] = useState("");
   const [connection, setConnection] = useState(null);
   const [resolved, setResolved] = useState(null);
   const [saveToDownloads, setSaveToDownloads] = useState(true);
@@ -663,14 +727,13 @@ export default function App() {
   const bytesSentRef = useRef(0);
   const speedWindowRef = useRef({ at: 0, bytes: 0 });
 
-  const [showTechDetails, setShowTechDetails] = useState(false);
 
   const [chatMode, setChatMode] = useState(CHAT_MODE.FEATHER);
-  const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
   const [chatError, setChatError] = useState("");
   const [chatLineCount, setChatLineCount] = useState(0);
+  const [mobileTab, setMobileTab] = useState("connect");
   const seenChatIdsRef = useRef(new Set());
   const chatPanelAnchorRef = useRef(null);
 
@@ -678,6 +741,15 @@ export default function App() {
   const activeChatCode = (mode === "receive" ? connection?.code : resolved?.code) || "";
   const activeChatStorageKey =
     activeChatToken && activeChatCode ? `${CHAT_STORAGE_PREFIX}_${activeChatToken}_${activeChatCode}` : "";
+  const participantProfiles = participantProfilesForSession(activeChatToken || activeChatCode || "skypiea-session");
+  const senderDisplayName = participantProfiles.sender.name;
+  const receiverDisplayName = participantProfiles.receiver.name;
+  const localChatName = mode === "send"
+    ? `${participantProfiles.sender.name} (Sender)`
+    : `${participantProfiles.receiver.name} (Receiver)`;
+  const peerChatName = mode === "send"
+    ? `${participantProfiles.receiver.name} (Receiver)`
+    : `${participantProfiles.sender.name} (Sender)`;
 
   // confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -725,7 +797,7 @@ export default function App() {
     return null;
   };
 
-  const ingestChatMessage = (payload) => {
+  const ingestChatMessage = useCallback((payload) => {
     if (!payload) return;
     const incomingId = String(payload.msgId || payload.id || `${payload.ts || Date.now()}-${Math.random()}`);
     if (seenChatIdsRef.current.has(incomingId)) return;
@@ -747,9 +819,9 @@ export default function App() {
       const sender = senderRole === selfRole || payload.sender === "self" ? "self" : "peer";
       return [...prev, { id: incomingId, text, ts: Number(payload.ts) || Date.now(), sender }];
     });
-  };
+  }, [mode]);
 
-  const openSenderChatSocket = (token) => {
+  const openSenderChatSocket = useCallback((token) => {
     if (!token) return;
     try {
       if (senderChatWsRef.current && senderChatWsRef.current.readyState === WebSocket.OPEN) {
@@ -772,7 +844,7 @@ export default function App() {
       let msg;
       try {
         msg = JSON.parse(ev.data);
-      } catch (e) {
+      } catch {
         return;
       }
       if (msg.type === "chat-message") {
@@ -786,7 +858,7 @@ export default function App() {
       if (senderChatWsRef.current === socket) senderChatWsRef.current = null;
     };
     senderChatWsRef.current = socket;
-  };
+  }, [ingestChatMessage]);
 
   const sendChatMessage = () => {
     const text = String(chatDraft || "").trim();
@@ -824,6 +896,23 @@ export default function App() {
     }
   };
 
+  const appendSystemChatMessage = useCallback((text) => {
+    const body = String(text || "").trim();
+    if (!body) return;
+    const incomingLines = lineCountOfText(body);
+    const msgId = `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    setChatMessages((prev) => {
+      const nextLineCount = lineCountOfMessages(prev) + incomingLines;
+      if (nextLineCount > CHAT_MAX_LINES) {
+        setChatError("Chat reached the 1000-line cap. Delete history or switch to Feather for fresh chat.");
+        return prev;
+      }
+      seenChatIdsRef.current.add(msgId);
+      return [...prev, { id: msgId, text: body, ts: Date.now(), sender: "system" }];
+    });
+  }, []);
+
   const handleChatDraftKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -837,19 +926,6 @@ export default function App() {
     setChatError("");
     seenChatIdsRef.current = new Set();
     if (activeChatStorageKey) localStorage.removeItem(activeChatStorageKey);
-  };
-
-  const openChatMode = () => {
-    if (!activeChatToken || !activeChatCode) {
-      setChatError("Generate or resolve a connection first, then open chat.");
-      return;
-    }
-    setChatOpen(true);
-    requestAnimationFrame(() => {
-      try {
-        chatPanelAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } catch (e) {}
-    });
   };
 
   useEffect(() => {
@@ -876,7 +952,6 @@ export default function App() {
       setChatMessages([]);
       setChatLineCount(0);
       seenChatIdsRef.current = new Set();
-      setChatOpen(false);
       return;
     }
 
@@ -946,8 +1021,8 @@ export default function App() {
     try {
       const folderToUse = saveToDownloads ? "" : dir;
       const url = folderToUse
-        ? `${API_BASE}/connection-info?dir=${encodeURIComponent(folderToUse)}&note=${encodeURIComponent(note)}`
-        : `${API_BASE}/connection-info?note=${encodeURIComponent(note)}`;
+        ? `${API_BASE}/connection-info?dir=${encodeURIComponent(folderToUse)}`
+        : `${API_BASE}/connection-info`;
 
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
@@ -1035,6 +1110,7 @@ export default function App() {
                 hostChunksRef.current.filename = m.filename || "download.bin";
                 setProgress("0%");
                 logMsg("Incoming file:", hostChunksRef.current.filename);
+                appendSystemChatMessage("File transfer started");
               } else if (m.type === "complete") {
                 const blob = new Blob(hostChunksRef.current.chunks);
                 const url = URL.createObjectURL(blob);
@@ -1048,6 +1124,7 @@ export default function App() {
                 setProgress("Done");
                 setShowConfetti(true); // Trigger confetti blast on successful download
                 logMsg("Download finished:", a.download);
+                appendSystemChatMessage("Transfer completed");
                 hostChunksRef.current.chunks = [];
               } else if (m.type === "error") {
                 setError(m.message || "Receiver error");
@@ -1055,12 +1132,15 @@ export default function App() {
                 if (m.action === "pause") {
                   setIsPaused(true);
                   pausedRef.current = true;
+                  appendSystemChatMessage("Transfer paused");
                 } else if (m.action === "resume") {
                   setIsPaused(false);
                   pausedRef.current = false;
+                  appendSystemChatMessage("Transfer resumed");
                 } else if (m.action === "stop") {
                   setIsTransmitting(false);
                   setIsPaused(false);
+                  appendSystemChatMessage("Transfer stopped");
                 }
               }
             } else if (ev.data instanceof ArrayBuffer) {
@@ -1243,11 +1323,13 @@ export default function App() {
             setSpeedText("");
             setIsTransmitting(false);
             setShowConfetti(true); // Trigger confetti blast on successful completion
+            appendSystemChatMessage("Transfer completed");
             ws.close();
           } else if (msg.type === "paused") {
             pausedRef.current = true;
             setIsPaused(true);
             logMsg("Transfer paused");
+            appendSystemChatMessage("Transfer paused");
           } else if (msg.type === "resumed") {
             pausedRef.current = false;
             setIsPaused(false);
@@ -1255,27 +1337,32 @@ export default function App() {
               resumeResolveRef.current();
             }
             logMsg("Transfer resumed");
+            appendSystemChatMessage("Transfer resumed");
           } else if (msg.type === "stopped") {
             stoppedRef.current = true;
             setIsTransmitting(false);
             setIsPaused(false);
             setProgress("Stopped by receiver");
+            appendSystemChatMessage("Transfer stopped");
             ws.close();
           } else if (msg.type === "control" && msg.action) {
             if (msg.action === "pause") {
               pausedRef.current = true;
               setIsPaused(true);
+              appendSystemChatMessage("Transfer paused");
             } else if (msg.action === "resume") {
               pausedRef.current = false;
               setIsPaused(false);
               if (resumeResolveRef.current) {
                 resumeResolveRef.current();
               }
+              appendSystemChatMessage("Transfer resumed");
             } else if (msg.action === "stop") {
               stoppedRef.current = true;
               setIsTransmitting(false);
               setIsPaused(false);
               setProgress("Stopped by receiver");
+              appendSystemChatMessage("Transfer stopped");
               ws.close();
             }
           } else if (msg.type === "error") {
@@ -1365,7 +1452,7 @@ export default function App() {
     if (!senderChatWsRef.current || senderChatWsRef.current.readyState !== WebSocket.OPEN) {
       openSenderChatSocket(resolved.token);
     }
-  }, [mode, resolved?.token]);
+  }, [mode, resolved?.token, openSenderChatSocket]);
 
   // ------- Scanner integration -------
   const handleScannerDetected = (payload) => {
@@ -1601,29 +1688,8 @@ export default function App() {
     setConfirmOpen(true);
   }
 
-  const QRPlaceholder = ({ value = "" }) => {
-    const seed = (value || "demo").slice(0, 8).split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-    return (
-      <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden>
-        <rect width="120" height="120" rx="8" fill="#fff" />
-        {Array.from({ length: 16 }).map((_, r) =>
-          Array.from({ length: 16 }).map((__, c) => {
-            const n = (r * 16 + c + seed) % 7;
-            const size = 6.5;
-            const x = 6 + c * size;
-            const y = 6 + r * size;
-            const fill = n > 3 ? "#2b463c" : "transparent";
-            return <rect key={`${r}-${c}`} x={x} y={y} width={size - 1.4} height={size - 1.4} fill={fill} rx="1" />;
-          })
-        )}
-        <circle cx="60" cy="60" r="18" fill="#b1d182" opacity="0.08" />
-      </svg>
-    );
-  };
-
   const resetHostForm = () => {
     setHostFolder("");
-    setNote("");
     setShowOptionalDestination(false);
     setSaveToDownloads(true);
     setConnection(null);
@@ -1647,6 +1713,10 @@ export default function App() {
 
   const hasChatContext = Boolean(activeChatToken && activeChatCode);
   const chatSocketOpen = Boolean(getActiveChatSocket());
+  const transferDone = progress === "Done" || progress === "Done!" || progressNumber >= 100;
+  const connectionReady = Boolean(connection || resolved);
+  const connectionStatus = chatSocketOpen || isTransmitting ? "Connected" : mode ? "Waiting" : "Disconnected";
+  const activeStep = transferDone ? 3 : connectionReady || isTransmitting ? 2 : 1;
 
   const ribbonElement = (
     <div className="preview-inner" aria-hidden>
@@ -1667,7 +1737,7 @@ export default function App() {
       }}
     >
       <span style={{ fontSize: 18, lineHeight: 1 }}>{persona?.emoji || "🟢"}</span>
-      <span style={{ fontWeight: 600, color: "#2b463c" }}>{persona?.name || "Skypiea Peer"}</span>
+      <span style={{ fontWeight: 600, color: "#2b463c" }}>{persona?.name || "Receiver"}</span>
     </div>
   );
 
@@ -1698,47 +1768,44 @@ export default function App() {
   // -------------------
   const mainApp = (
     <div className="site-root">
-      <Header />
+      <Header connectionStatus={connectionStatus} activeStep={activeStep} />
 
       <main className="main-content" role="main" aria-label="Skypiea application">
         <div className="app-root">
           <div className="app-container">
             {/* === START: the original app UI (kept intact) === */}
-            <header className="app-header">
-              <div className="title-area">
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <SiBluesky style={{ fontSize: "32px", color: "#2b463c" }} />
-                  <h1 className="typing-intro">{introText}</h1>
-                </div>
+            <header className="dashboard-toolbar card animate-in">
+              <div className="toolbar-copy">
+                <h1 className="typing-intro typing-intro-live">{introText}</h1>
+                <p>No login. Temporary secure session. Keep both devices open.</p>
               </div>
 
               <div className="mode-actions">
                 {!mode ? (
                   <>
-                    <button className="large-choose host-choose" onClick={() => setMode("send")}>
-                      Send
-                    </button>
-                    <button className="large-choose receive-choose" onClick={() => setMode("receive")}>
-                      Receive
-                    </button>
+                    <button className="large-choose host-choose" onClick={() => setMode("send")}>Send</button>
+                    <button className="large-choose receive-choose" onClick={() => setMode("receive")}>Receive</button>
                   </>
                 ) : (
                   <>
-                    <button className={`tab ${mode === "send" ? "active" : ""}`} onClick={() => setMode("send")}>
-                      Send
-                    </button>
-                    <button className={`tab ${mode === "receive" ? "active" : ""}`} onClick={() => setMode("receive")}>
-                      Receive
-                    </button>
+                    <button className={`tab ${mode === "send" ? "active" : ""}`} onClick={() => setMode("send")}>Send</button>
+                    <button className={`tab ${mode === "receive" ? "active" : ""}`} onClick={() => setMode("receive")}>Receive</button>
                   </>
                 )}
               </div>
             </header>
 
+            <div className="mobile-dashboard-tabs" role="tablist" aria-label="Mobile sections">
+              <button type="button" role="tab" aria-selected={mobileTab === "connect"} className={mobileTab === "connect" ? "active" : ""} onClick={() => setMobileTab("connect")}>Connect</button>
+              <button type="button" role="tab" aria-selected={mobileTab === "transfer"} className={mobileTab === "transfer" ? "active" : ""} onClick={() => setMobileTab("transfer")}>Transfer</button>
+              <button type="button" role="tab" aria-selected={mobileTab === "chat"} className={mobileTab === "chat" ? "active" : ""} onClick={() => setMobileTab("chat")}>Chat</button>
+              <button type="button" role="tab" aria-selected={mobileTab === "logs"} className={mobileTab === "logs" ? "active" : ""} onClick={() => setMobileTab("logs")}>Logs</button>
+            </div>
+
             <div className="content-grid">
-              <section className="left-column">
+              <section className={`left-column mobile-pane ${mobileTab === "transfer" || mobileTab === "logs" ? "is-mobile-active" : ""}`}>
                 {mode === "receive" && (
-                  <div className="card animate-in stretch-card">
+                  <div className={`card animate-in stretch-card transfer-panel mobile-pane ${mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
                     <h2>Receive: Configure Destination</h2>
 
                     <label
@@ -1805,11 +1872,6 @@ export default function App() {
                       </div>
                     )}
 
-                    <div style={{ marginTop: 12 }}>
-                      <label>Optional Note</label>
-                      <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. phone photos" rows={3} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid rgba(43,70,60,0.10)", resize: "vertical" }} />
-                    </div>
-
                     <div className="host-actions" style={{ marginTop: 12 }}>
                       <button className="primary" onClick={generateHost} disabled={isLoading}>
                         {isLoading ? "Generating..." : "Generate Code & QR"}
@@ -1850,7 +1912,6 @@ export default function App() {
                           <p>
                             Save to: <strong>{saveToDownloads ? "Browser Downloads" : connection.dir || "uploads/"}</strong>
                           </p>
-                          {connection.note && <p className="note">Note: {connection.note}</p>}
                           <p className="time">Created: {new Date(connection.generatedAt || Date.now()).toLocaleTimeString()}</p>
                           {timeRemaining !== null && (
                             <p className="countdown" style={{
@@ -1876,7 +1937,7 @@ export default function App() {
                 )}
 
                 {mode === "send" && (
-                  <div className="card animate-in">
+                  <div className={`card animate-in transfer-panel mobile-pane ${mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
                     <h2>Send: Connect to Receiver</h2>
 
                     <label className="checkbox-inline" style={{ alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setSaveToDownloads((s) => !s)}>
@@ -1949,11 +2010,8 @@ export default function App() {
                         {/* Replaced the old connection-box with our ConnectedPanel inline */}
                         <ConnectedPanel
                           persona={resolved.persona}
-                          note={resolved.note}
                           ip={resolved.ip}
                           port={resolved.port}
-                          showTechDetails={showTechDetails}
-                          onToggleTech={() => setShowTechDetails((s) => !s)}
                           file={file}
                           onFileChange={(f) => setFile(f)}
                           onStart={() => startSend()}
@@ -1989,75 +2047,26 @@ export default function App() {
                 )}
 
                 <div ref={chatPanelAnchorRef} />
-                <ChatPanel
-                  visible={hasChatContext && chatOpen}
-                  onClose={() => setChatOpen(false)}
-                  mode={chatMode}
-                  isConnected={chatSocketOpen}
-                  lineCount={chatLineCount}
-                  maxLines={CHAT_MAX_LINES}
-                  messages={chatMessages}
-                  draft={chatDraft}
-                  chatError={chatError}
-                  onModeChange={setChatMode}
-                  onDraftChange={setChatDraft}
-                  onSend={sendChatMessage}
-                  onDraftKeyDown={handleChatDraftKeyDown}
-                  onDeleteHistory={clearChatHistory}
-                />
 
-                {/* NEW: Transmission Constraints card placed above the log to match theme */}
-                <div className="constraints-card">
-  <h4>Transmission Constraints</h4>
-  <ul className="constraints-list">
-    <li>
-      <div className="constraints-key">Both devices online</div>
-      <div className="constraints-value">Same WiFi network (local) or internet access (production)</div>
-    </li>
-
-    <li>
-      <div className="constraints-key">5-minute time limit</div>
-      <div className="constraints-value">Connect within 5 minutes after generating QR code</div>
-    </li>
-
-
-
-    <li>
-      <div className="constraints-key">20-minute session</div>
-      <div className="constraints-value">Complete file upload within 20 minutes</div>
-    </li>
-
-    <li>
-      <div className="constraints-key">File size limit</div>
-      <div className="constraints-value">Maximum 5GB per transfer</div>
-    </li>
-
-    <li>
-      <div className="constraints-key">Connection code format</div>
-      <div className="constraints-value">Use exactly 4 characters with lower + upper + special (example: aB#x)</div>
-    </li>
-
-    <li>
-      <div className="constraints-key">Keep browsers open</div>
-      <div className="constraints-value">Don't close tabs or switch apps during transfer</div>
-    </li>
-
-    <li>
-      <div className="constraints-key">Stable connection</div>
-      <div className="constraints-value">Avoid switching WiFi/cellular mid-transfer</div>
-    </li>
-  </ul>
-</div>
-
-
-                <div className="log-card">
+                <div className={`log-card mobile-pane ${mobileTab === "logs" ? "is-mobile-active" : ""}`}>
                   <div className="log-head">Transmission Log</div>
                   <pre className="log-area">{log || "No activity yet."}</pre>
                 </div>
+
+                <div className={`constraints-card compact mobile-pane ${mobileTab === "logs" ? "is-mobile-active" : ""}`}>
+                  <h4>Transmission Constraints</h4>
+                  <ul className="constraints-list">
+                    <li><div className="constraints-key">Both online</div><div className="constraints-value">Both devices must stay online</div></li>
+                    <li><div className="constraints-key">Network</div><div className="constraints-value">Same WiFi or internet access</div></li>
+                    <li><div className="constraints-key">Connection</div><div className="constraints-value">Code expires in 5 minutes</div></li>
+                    <li><div className="constraints-key">Transfer</div><div className="constraints-value">20-minute transfer window</div></li>
+                    <li><div className="constraints-key">Max size</div><div className="constraints-value">5GB per file</div></li>
+                  </ul>
+                </div>
               </section>
 
-              <aside className="right-column">
-                <div className="panel card animate-in">
+              <aside className={`right-column mobile-pane ${mobileTab === "connect" || mobileTab === "chat" ? "is-mobile-active" : ""}`}>
+                <div className={`panel card animate-in connection-hero mobile-pane ${mobileTab === "connect" ? "is-mobile-active" : ""}`}>
                   {!mode && (
                     <div className="hero">
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
@@ -2087,7 +2096,6 @@ export default function App() {
                             <div>
                               Destination: <strong>{saveToDownloads ? "Browser Downloads" : connection.dir || "uploads/"}</strong>
                             </div>
-                            {connection.note && <div className="muted">Note: {connection.note}</div>}
 
                             <div className="host-controls" style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 8 }}>
                               <button className="muted-btn" onClick={hostPause} disabled={!connection || !isTransmitting || isPaused}>
@@ -2099,6 +2107,15 @@ export default function App() {
                               <button className="muted-btn" onClick={hostStop} disabled={!connection || !isTransmitting} style={{ borderColor: "#8b2a2a", color: "#8b2a2a" }}>
                                 Stop
                               </button>
+                            </div>
+
+                            <div className="hero-status-line">
+                              <span>{connectionStatus}</span>
+                              <span>{receiverDisplayName}</span>
+                            </div>
+                            <div className="hero-status-line">
+                              <span>Sender: {senderDisplayName}</span>
+                              <span>Receiver: {receiverDisplayName}</span>
                             </div>
                           </div>
                         </div>
@@ -2129,13 +2146,18 @@ export default function App() {
                                 <ConnectedIcon />
                               </span>
                             </div>
-                            {resolved.note && <div className="muted">{resolved.note}</div>}
                           </div>
 
                           <div className="progress-track" style={{ marginTop: 10 }}>
                             <div className="progress-bar" style={{ width: `${progressNumber}%` }} />
                           </div>
                           <div className="progress-label">{progress || "0%"}</div>
+                          {speedText && <div className="muted">Speed: {speedText}</div>}
+
+                          <div className="hero-status-line" style={{ marginTop: 8 }}>
+                            <span>Sender: {senderDisplayName}</span>
+                            <span>Receiver: {receiverDisplayName}</span>
+                          </div>
 
                           <div className="host-controls" style={{ display: "flex", gap: 8, marginTop: 8 }}>
                             <button className="muted-btn" onClick={pauseSending} disabled={!resolved || !isTransmitting || isPaused}>
@@ -2153,6 +2175,60 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
+                <div className={`mobile-pane ${mobileTab === "chat" ? "is-mobile-active" : ""}`}>
+                  {hasChatContext ? (
+                    <ChatPanel
+                      visible={true}
+                      allowClose={false}
+                      onClose={() => {}}
+                      mode={chatMode}
+                      isConnected={chatSocketOpen}
+                      lineCount={chatLineCount}
+                      maxLines={CHAT_MAX_LINES}
+                      messages={chatMessages}
+                      draft={chatDraft}
+                      chatError={chatError}
+                      onModeChange={setChatMode}
+                      onDraftChange={setChatDraft}
+                      onSend={sendChatMessage}
+                      onDraftKeyDown={handleChatDraftKeyDown}
+                      onDeleteHistory={clearChatHistory}
+                      localUserName={localChatName}
+                      peerUserName={peerChatName}
+                    />
+                  ) : (
+                    <div className="card animate-in chat-card">
+                      <div className="chat-head">
+                        <div className="chat-title-wrap">
+                          <h2>Direct Chat</h2>
+                          <span className="chat-connection-dot offline">Disconnected</span>
+                        </div>
+                      </div>
+                      <div className="chat-mode-switch" role="radiogroup" aria-label="Chat persistence mode">
+                        <button type="button" className="chat-mode-btn active" role="radio" aria-checked="true">
+                          <FaFeatherAlt style={{ marginRight: 6, verticalAlign: "middle" }} />
+                          Feather mode
+                        </button>
+                        <button type="button" className="chat-mode-btn" role="radio" aria-checked="false">
+                          <GiHeavyHelm style={{ marginRight: 6, verticalAlign: "middle" }} />
+                          Boulder mode
+                        </button>
+                      </div>
+                      <div className="chat-meta-row">
+                        <span>0 / 1000 lines used</span>
+                        <button type="button" className="chat-delete" disabled>Delete History</button>
+                      </div>
+                      <div className="chat-thread" role="log" aria-label="Chat messages">
+                        <div className="chat-empty">Connect first to unlock direct chat.</div>
+                      </div>
+                      <div className="chat-compose">
+                        <textarea value="" readOnly placeholder="Waiting for connection..." rows={3} />
+                        <button type="button" className="primary" disabled>Send</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </aside>
             </div>
 
@@ -2160,20 +2236,6 @@ export default function App() {
           </div>
         </div>
       </main>
-
-      {hasChatContext && !chatOpen && (
-        <button
-          type="button"
-          className="chat-fab"
-          onClick={openChatMode}
-          aria-label="Open chat mode"
-        >
-          <span className="chat-fab-icon">
-            {chatMode === CHAT_MODE.FEATHER ? <FaFeatherAlt /> : <GiHeavyHelm />}
-          </span>
-          <span className="chat-fab-label">Open Chat</span>
-        </button>
-      )}
 
       {/* modals and overlays remain sibling to main (so they can overlay correctly) */}
       <ScannerModal open={openScanner} onClose={() => setOpenScanner(false)} onDetected={handleScannerDetected} />

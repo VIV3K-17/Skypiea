@@ -18,6 +18,7 @@ const Ribbons = ({
   backgroundColor = [0, 0, 0, 0]
 }) => {
   const containerRef = useRef(null);
+  const isHoveringRef = useRef(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -36,6 +37,7 @@ const Ribbons = ({
     gl.canvas.style.left = '0';
     gl.canvas.style.width = '100%';
     gl.canvas.style.height = '100%';
+    gl.canvas.style.pointerEvents = 'none';
     container.appendChild(gl.canvas);
 
     const scene = new Transform();
@@ -104,10 +106,13 @@ const Ribbons = ({
     function resize() {
       const width = container.clientWidth;
       const height = container.clientHeight;
+      if (!width || !height) return;
       renderer.setSize(width, height);
       lines.forEach(line => line.polyline.resize());
     }
     window.addEventListener('resize', resize);
+    const resizeObserver = new ResizeObserver(() => resize());
+    resizeObserver.observe(container);
 
     const center = (colors.length - 1) / 2;
     colors.forEach((color, index) => {
@@ -155,6 +160,14 @@ const Ribbons = ({
     resize();
 
     const mouse = new Vec3();
+
+    function setHoverState(nextHover, event) {
+      isHoveringRef.current = nextHover;
+      if (nextHover && event) {
+        updateMouse(event);
+      }
+    }
+
     function updateMouse(e) {
       let x, y;
       const rect = container.getBoundingClientRect();
@@ -167,11 +180,33 @@ const Ribbons = ({
       }
       const width = container.clientWidth;
       const height = container.clientHeight;
+      if (!width || !height) return;
       mouse.set((x / width) * 2 - 1, (y / height) * -2 + 1, 0);
     }
+
+    function handleMouseEnter(e) {
+      setHoverState(true, e);
+    }
+
+    function handleMouseLeave() {
+      setHoverState(false);
+    }
+
+    function handleTouchStart(e) {
+      setHoverState(true, e);
+    }
+
+    function handleTouchEnd() {
+      setHoverState(false);
+    }
+
     container.addEventListener('mousemove', updateMouse);
+    container.addEventListener('mouseenter', handleMouseEnter);
+    container.addEventListener('mouseleave', handleMouseLeave);
     container.addEventListener('touchstart', updateMouse);
     container.addEventListener('touchmove', updateMouse);
+    container.addEventListener('touchstart', handleTouchStart);
+    container.addEventListener('touchend', handleTouchEnd);
 
     const tmp = new Vec3();
     let frameId;
@@ -183,6 +218,10 @@ const Ribbons = ({
       lastTime = currentTime;
 
       lines.forEach(line => {
+        if (line.polyline.mesh.program.uniforms.uOpacity) {
+          line.polyline.mesh.program.uniforms.uOpacity.value = isHoveringRef.current ? 1.0 : 0.0;
+        }
+
         tmp.copy(mouse).add(line.mouseOffset).sub(line.points[0]).multiply(line.spring);
         line.mouseVelocity.add(tmp).multiply(line.friction);
         line.points[0].add(line.mouseVelocity);
@@ -208,9 +247,14 @@ const Ribbons = ({
 
     return () => {
       window.removeEventListener('resize', resize);
+      resizeObserver.disconnect();
       container.removeEventListener('mousemove', updateMouse);
+      container.removeEventListener('mouseenter', handleMouseEnter);
+      container.removeEventListener('mouseleave', handleMouseLeave);
       container.removeEventListener('touchstart', updateMouse);
       container.removeEventListener('touchmove', updateMouse);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchend', handleTouchEnd);
       cancelAnimationFrame(frameId);
       if (gl.canvas && gl.canvas.parentNode === container) {
         container.removeChild(gl.canvas);
@@ -235,7 +279,7 @@ const Ribbons = ({
   <div
     ref={containerRef}
     className="ribbons-container"
-    style={{ position: 'relative', width: '100%', minHeight: '300px' }}
+    style={{ position: 'relative', width: '100%', height: '100%' }}
   />
 );
 

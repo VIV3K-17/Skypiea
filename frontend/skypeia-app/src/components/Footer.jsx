@@ -1,6 +1,5 @@
 import React from "react";
 import { SocialIcon } from "react-social-icons";
-import { Link } from "react-router-dom";
 
 /**
  * FooterLarge.jsx
@@ -70,35 +69,13 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
 .footer-mid {
   flex: 1 1 auto;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
+  min-height: 1px;
 }
 .rating-stars {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-}
-.rating-stars .avg-block {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.rating-display {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.rating-numeric {
-  font-weight: 800;
-  color: #111827;
-  font-size: 20px;
-}
-.rating-count {
-  font-size: 13px;
-  color: #6b7280;
 }
 
 /* star buttons */
@@ -130,29 +107,15 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
 .star-empty path { fill: #e6e7eb; }
 .star-filled path { fill: #f59e0b; }
 
-.star-hint {
-  font-size: 13px;
-  color: #475569;
-  margin-top: 8px;
-}
-
-/* small confirmation */
-.rating-toast {
-  margin-top: 8px;
-  font-size: 13px;
-  color: #0f5132;
-  background: rgba(34,197,94,0.08);
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(16,185,129,0.08);
-}
-
 /* Right links */
 .footer-right {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+}
+.footer-right .rating-stars {
+  align-items: flex-end;
 }
 .footer-links {
   display: flex;
@@ -235,6 +198,9 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   .footer-right {
     justify-content: center;
   }
+  .footer-right .rating-stars {
+    align-items: center;
+  }
   .footer-large__bottom {
     flex-direction: column;
     gap: 10px;
@@ -256,58 +222,20 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
     { url: "https://www.facebook.com/s.sai.vivek.74", label: "Facebook" }
   ];
 
-  //
-  // Dynamic rating via backend (SQLite)
   const API_BASE = "https://skypiea-2.onrender.com";
-  const [displayAvg, setDisplayAvg] = React.useState(0);
-  const [displayCount, setDisplayCount] = React.useState(0);
   const [userRating, setUserRating] = React.useState(null);
   const [hoverRating, setHoverRating] = React.useState(0);
-  
-  // Modal state for rating confirmation
-  const [ratingModalOpen, setRatingModalOpen] = React.useState(false);
-  const [ratingModalMessage, setRatingModalMessage] = React.useState("");
-
-  const fetchStats = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/rating`);
-      const data = await res.json();
-      const avg = typeof data.avg === "number" ? Number(data.avg.toFixed(2)) : 0;
-      const cnt = typeof data.count === "number" ? data.count : 0;
-      setDisplayAvg(avg);
-      setDisplayCount(cnt);
-    } catch { void 0; }
-  };
-
-  React.useEffect(() => {
-    fetchStats();
-  }, []);
-
   const handleVote = async (n) => {
     if (!n || n < 1 || n > 5) return;
+    setUserRating(n);
     try {
-      const res = await fetch(`${API_BASE}/rating`, {
+      await fetch(`${API_BASE}/rating`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: n })
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setRatingModalMessage(err && err.error ? err.error : "Could not submit rating");
-        setRatingModalOpen(true);
-        return;
-      }
-      const data = await res.json();
-      setUserRating(n);
-      const avg = typeof data.avg === "number" ? Number(data.avg.toFixed(2)) : displayAvg;
-      const cnt = typeof data.count === "number" ? data.count : displayCount + 1;
-      setDisplayAvg(avg);
-      setDisplayCount(cnt);
-      setRatingModalMessage("Thanks for rating Skypiea! Your feedback helps us improve.");
-      setRatingModalOpen(true);
     } catch {
-      setRatingModalMessage("Network error while submitting rating");
-      setRatingModalOpen(true);
+      // Preserve selected stars even if network submit fails.
     }
   };
 
@@ -315,10 +243,11 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
     if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
       e.preventDefault();
       handleVote(n);
+      setHoverRating(0);
     }
     if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
       e.preventDefault();
-      const newV = Math.max(1, (hoverRating || userRating || 0) - 1);
+      const newV = Math.max(1, (hoverRating || userRating || 1) - 1);
       setHoverRating(newV);
     }
     if (e.key === "ArrowRight" || e.key === "ArrowUp") {
@@ -348,66 +277,37 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
           </div>
         </div>
 
-        {/* CENTER - dynamic rating */}
-        <div className="footer-mid">
-          <div className="rating-stars" aria-live="polite">
-            <div className="avg-block">
-              <div className="rating-display">
-                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {Array.from({ length: 5 }).map((_, i) => {
-                    const starValue = i + 1;
-                    const rounded = Math.round(displayAvg);
-                    return <Star key={i} filled={starValue <= rounded} />;
-                  })}
-                </div>
-                <div>
-                  <div className="rating-numeric" aria-label={`Average rating ${displayAvg} out of 5`}>{displayAvg}</div>
-                  <div className="rating-count">{displayCount.toLocaleString()} ratings</div>
-                </div>
-              </div>
-            </div>
-
-            <>
-              <div className="star-row" role="radiogroup" aria-label="Rate Skypiea">
-                {Array.from({ length: 5 }).map((_, i) => {
-                  const n = i + 1;
-                  const active = hoverRating || userRating || 0;
-                  const isFilled = n <= active;
-                  return (
-                    <button
-                      key={n}
-                      className="star-btn"
-                      role="radio"
-                      aria-checked={active === n}
-                      aria-label={`${n} star${n > 1 ? "s" : ""}`}
-                      onClick={() => handleVote(n)}
-                      onKeyDown={(e) => handleKey(e, n)}
-                      onMouseEnter={() => setHoverRating(n)}
-                      onMouseLeave={() => setHoverRating(0)}
-                      title={`Rate ${n} star${n > 1 ? "s" : ""}`}
-                    >
-                      <svg viewBox="0 0 24 24" className="star-svg" aria-hidden>
-                        <path d="M12 .587l3.668 7.431 8.2 1.193-5.934 5.789 1.402 8.17L12 18.896l-7.336 3.873 1.402-8.17L.132 9.211l8.2-1.193z"
-                          fill={isFilled ? "#f59e0b" : "#e6e7eb"} />
-                      </svg>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="star-hint">
-                {userRating ? `Your latest selection: ${userRating} star${userRating > 1 ? "s" : ""}.` : "Click a star to rate Skypiea"}
-              </div>
-            </>
-          </div>
-        </div>
+        <div className="footer-mid" />
 
         {/* RIGHT */}
         <div className="footer-right">
-          <nav className="footer-links" aria-label="Footer links">
-            
-            <Link to="/privacy">Privacy</Link>
-            <Link to="/contact">Contact</Link>
-          </nav>
+          <div className="rating-stars" aria-live="polite">
+            <div className="star-row" role="radiogroup" aria-label="Rate Skypiea">
+              {Array.from({ length: 5 }).map((_, i) => {
+                const n = i + 1;
+                const active = hoverRating || userRating || 0;
+                return (
+                  <button
+                    key={n}
+                    className="star-btn"
+                    role="radio"
+                    aria-checked={active === n}
+                    aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                    onClick={() => {
+                      handleVote(n);
+                      setHoverRating(0);
+                    }}
+                    onKeyDown={(e) => handleKey(e, n)}
+                    onMouseEnter={() => setHoverRating(n)}
+                    onMouseLeave={() => setHoverRating(0)}
+                    title={`Rate ${n} star${n > 1 ? "s" : ""}`}
+                  >
+                    <Star filled={n <= active} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -430,21 +330,6 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
           ))}
         </div>
       </div>
-
-      {/* Rating confirmation modal (reused from App.jsx ConfirmModal style) */}
-      {ratingModalOpen && (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <h3>Rating Submitted</h3>
-            <p style={{ marginTop: 8 }}>{ratingModalMessage}</p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button className="primary" onClick={() => setRatingModalOpen(false)}>
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </footer>
   );
 }
