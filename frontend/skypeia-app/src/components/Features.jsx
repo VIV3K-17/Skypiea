@@ -78,12 +78,12 @@ export default function FeaturesPage() {
     >
       <Header />
 
-      <main style={{ maxWidth: 1200, margin: "0 auto", padding: "60px 20px" }}>
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: "clamp(28px, 6vw, 60px) clamp(12px, 4vw, 20px)" }}>
         {/* Page header */}
         <section style={{ textAlign: "center", marginBottom: 40 }}>
           <h1
             style={{
-              fontSize: "2.5rem",
+              fontSize: "clamp(1.9rem, 6vw, 2.5rem)",
               fontWeight: 800,
               color: BRAND.green,
               marginBottom: 10,
@@ -94,7 +94,7 @@ export default function FeaturesPage() {
           <p
             style={{
               color: BRAND.textMuted,
-              fontSize: 16,
+              fontSize: "clamp(14px, 2.6vw, 16px)",
               maxWidth: 700,
               margin: "0 auto",
             }}
@@ -139,21 +139,28 @@ export default function FeaturesPage() {
           .features-grid {
             display: grid;
             grid-template-columns: 1fr;
-            gap: 28px;
+            gap: 20px;
             justify-content: center;
           }
 
           @media (min-width: 768px) {
             .features-grid {
-              grid-template-columns: repeat(2, 350px);
+              grid-template-columns: repeat(2, minmax(0, 1fr));
               gap: 32px;
               justify-content: center;
             }
           }
 
+          @media (min-width: 1200px) {
+            .features-grid {
+              grid-template-columns: repeat(2, 520px);
+            }
+          }
+
           .feature-card {
-            width: 350px;
-            height: 400px;
+            width: min(100%, 520px);
+            min-height: 360px;
+            height: auto;
             border-radius: 16px;
             overflow: hidden;
             background: #ffffff;
@@ -168,7 +175,7 @@ export default function FeaturesPage() {
           }
 
           .feature-inner {
-            height: 100%;
+            min-height: 100%;
             width: 100%;
             padding: 1.75rem;
             display: flex;
@@ -222,8 +229,21 @@ export default function FeaturesPage() {
           @media (max-width: 767px) {
             .feature-card {
               width: 100%;
-              max-width: 350px;
+              max-width: 100%;
               margin: 0 auto;
+            }
+
+            .feature-inner {
+              padding: 1.2rem;
+            }
+
+            .feature-title {
+              font-size: 1rem;
+            }
+
+            .feature-summary,
+            .feature-list {
+              font-size: 0.88rem;
             }
           }
         `}</style>

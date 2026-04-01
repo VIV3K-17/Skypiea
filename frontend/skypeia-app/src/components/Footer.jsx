@@ -208,6 +208,47 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
     padding: 0 12px;
   }
 }
+
+@media (max-width: 520px) {
+  .footer-large {
+    padding: 30px 12px;
+  }
+
+  .brand-text .brand-name {
+    font-size: 18px;
+  }
+
+  .brand-text .brand-tag {
+    font-size: 13px;
+  }
+
+  .footer-links {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .footer-links a {
+    font-size: 13px;
+    padding: 6px 8px;
+  }
+
+  .footer-large__bottom {
+    margin-top: 20px;
+    padding-top: 14px;
+  }
+
+  .copyright {
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .social {
+    width: 40px;
+    height: 40px;
+  }
+}
     `;
     document.head.appendChild(s);
   }, []);

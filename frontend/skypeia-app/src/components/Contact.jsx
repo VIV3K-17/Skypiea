@@ -143,6 +143,40 @@ export default function Contact() {
   .contact-card h2 {
     font-size: 16px;
   }
+
+  .contact-card a {
+    width: 100%;
+    text-align: center;
+    padding: 10px 12px;
+  }
+
+  .try-now-btn {
+    width: 100%;
+    max-width: 280px;
+  }
+}
+
+@media (max-width: 420px) {
+  .contact-container {
+    padding: 24px 12px;
+  }
+
+  .contact-container h1 {
+    font-size: 22px;
+  }
+
+  .contact-container > p {
+    margin-bottom: 20px;
+  }
+
+  .contact-card {
+    padding: 14px;
+  }
+
+  .contact-section {
+    padding: 14px;
+    margin-top: 20px;
+  }
 }
     `;
     document.head.appendChild(s);

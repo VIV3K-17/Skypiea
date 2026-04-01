@@ -103,6 +103,51 @@ export default function Privacy() {
 .privacy-section {
   margin-bottom: 24px;
 }
+
+@media (max-width: 640px) {
+    .privacy-container {
+        padding: 30px 16px;
+    }
+
+    .privacy-container h1 {
+        font-size: 26px;
+    }
+
+    .privacy-container h2 {
+        font-size: 18px;
+        margin-top: 22px;
+    }
+
+    .privacy-container ul,
+    .privacy-container ol {
+        margin-left: 16px;
+    }
+
+    .try-now-btn {
+        width: 100%;
+        max-width: 280px;
+    }
+}
+
+@media (max-width: 420px) {
+    .privacy-container {
+        padding: 22px 12px;
+    }
+
+    .privacy-container h1 {
+        font-size: 22px;
+    }
+
+    .privacy-container p,
+    .privacy-container li {
+        font-size: 13px;
+    }
+
+    .privacy-intro {
+        padding: 12px;
+        margin-bottom: 16px;
+    }
+}
     `;
         document.head.appendChild(s);
     }, []);

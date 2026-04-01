@@ -71,6 +71,80 @@ export default function SupportPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(180deg,#f8fdf8 0%, #e8f7e6 100%)" }}>
+      <style>{`
+        .support-main {
+          max-width: 1000px;
+          margin: 0 auto;
+          padding: clamp(28px, 6vw, 56px) clamp(12px, 4vw, 20px);
+        }
+
+        .support-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 20px;
+          align-items: start;
+        }
+
+        .support-donate-card,
+        .support-faq-card {
+          background: rgba(255,255,255,1);
+          border-radius: 14px;
+          box-shadow: 0 10px 28px rgba(21,50,37,0.08);
+          border: 1px solid rgba(0,0,0,0.04);
+        }
+
+        .support-donate-card {
+          padding: 20px;
+        }
+
+        .support-faq-card {
+          padding: 16px;
+        }
+
+        .support-donate-inner {
+          display: flex;
+          gap: 18px;
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .support-donate-copy {
+          flex: 1 1 320px;
+          min-width: 260px;
+        }
+
+        .support-donate-qr {
+          width: 220px;
+          min-width: 220px;
+          border-radius: 12px;
+        }
+
+        @media (max-width: 768px) {
+          .support-donate-card {
+            padding: 14px;
+          }
+
+          .support-donate-inner {
+            flex-direction: column;
+          }
+
+          .support-donate-copy {
+            min-width: 0;
+            width: 100%;
+          }
+
+          .support-donate-qr {
+            width: 100%;
+            min-width: 0;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .support-main {
+            padding: 22px 10px;
+          }
+        }
+      `}</style>
       <Header />
 
       {/* Confirmation modal overlay */}
@@ -126,7 +200,7 @@ export default function SupportPage() {
         </div>
       )}
 
-      <main style={{ maxWidth: 1000, margin: "0 auto", padding: "56px 20px" }}>
+      <main className="support-main">
         <section style={{ textAlign: "center", marginBottom: 28 }}>
           <h1 style={{ fontSize: "2rem", color: BRAND.green, margin: 0, fontWeight: 800 }}>Support the project</h1>
           <p style={{ color: BRAND.muted, marginTop: 10, maxWidth: 720, marginLeft: "auto", marginRight: "auto" }}>
@@ -135,26 +209,11 @@ export default function SupportPage() {
           </p>
         </section>
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: 20,
-            alignItems: "start",
-          }}
-        >
+        <section className="support-grid">
           {/* Main donate card */}
-          <div
-            style={{
-              background: "rgba(255,255,255,1)",
-              borderRadius: 14,
-              padding: 20,
-              boxShadow: "0 10px 28px rgba(21,50,37,0.08)",
-              border: "1px solid rgba(0,0,0,0.04)",
-            }}
-          >
-            <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
-              <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+          <div className="support-donate-card">
+            <div className="support-donate-inner">
+              <div className="support-donate-copy">
                 <h2 style={{ margin: 0, color: BRAND.green, fontSize: 18, fontWeight: 800 }}>
                   Buy the developer a coffee ☕
                 </h2>
@@ -282,7 +341,7 @@ export default function SupportPage() {
               </div>
 
               {/* Right column: use an image for QR (either provided or fallback to a local project path) */}
-              <div style={{ width: 220, minWidth: 220, borderRadius: 12 }}>
+              <div className="support-donate-qr">
                 <div
                   style={{
                     background: "#fff",
@@ -333,15 +392,7 @@ export default function SupportPage() {
           </div>
 
           {/* Short FAQ / transparency card */}
-          <div
-            style={{
-              background: "rgba(255,255,255,1)",
-              borderRadius: 12,
-              padding: 16,
-              boxShadow: "0 8px 20px rgba(21,50,37,0.06)",
-              border: "1px solid rgba(0,0,0,0.04)",
-            }}
-          >
+          <div className="support-faq-card">
             <h3 style={{ marginTop: 0, color: BRAND.green }}>Where does the money go?</h3>
             <p style={{ color: BRAND.muted }}>
               Donations are used to cover hosting, maintenance, and open-source development time. Larger donations may be used for shared infrastructure costs.

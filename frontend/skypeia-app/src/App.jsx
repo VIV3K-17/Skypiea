@@ -6,6 +6,7 @@ import { ConnectedIcon, DisconnectedIcon } from "./components/ConnectionIcons";
 import Ribbons from "./components/Ribbons";
 import { SiBluesky } from "react-icons/si";
 import { FaFeatherAlt } from "react-icons/fa";
+import { FaQrcode, FaUpload, FaClock } from "react-icons/fa";
 import { GiHeavyHelm } from "react-icons/gi";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
@@ -733,6 +734,7 @@ export default function App() {
   const [chatLineCount, setChatLineCount] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState("connect");
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const seenChatIdsRef = useRef(new Set());
 
   const activeChatToken = (mode === "receive" ? connection?.token : resolved?.token) || "";
@@ -951,6 +953,19 @@ export default function App() {
   }, [chatMode]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 768px)");
+    const updateViewport = () => setIsMobileViewport(media.matches);
+    updateViewport();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", updateViewport);
+      return () => media.removeEventListener("change", updateViewport);
+    }
+    media.addListener(updateViewport);
+    return () => media.removeListener(updateViewport);
+  }, []);
+
+  useEffect(() => {
     const lc = lineCountOfMessages(chatMessages);
     setChatLineCount(lc);
   }, [chatMessages]);
@@ -958,7 +973,6 @@ export default function App() {
   useEffect(() => {
     if (!activeChatSessionKey) {
       clearChatHistory();
-      setChatOpen(false);
     }
   }, [activeChatSessionKey]);
 
@@ -1370,10 +1384,14 @@ export default function App() {
         if (res.ok) {
           const j = await res.json();
           setAvailableFolders(j.folders || []);
+        } else {
+          logMsg("Folders endpoint unavailable:", String(res.status));
         }
       } catch (e) {
         console.error("Failed to load folders:", e);
-        setError("Failed to load folders");
+        // Do not block app usage when backend is offline during initial page load.
+        // Folder management is optional until transfer setup.
+        logMsg("Backend not reachable at", API_BASE, "- folder list disabled until server is online");
       }
     }
     loadFolders();
@@ -1769,17 +1787,25 @@ export default function App() {
             </header>
 
             <div className="mobile-dashboard-tabs" role="tablist" aria-label="Mobile sections">
-              <button type="button" role="tab" aria-selected={mobileTab === "connect"} className={mobileTab === "connect" ? "active" : ""} onClick={() => setMobileTab("connect")}>Connect</button>
-              <button type="button" role="tab" aria-selected={mobileTab === "transfer"} className={mobileTab === "transfer" ? "active" : ""} onClick={() => setMobileTab("transfer")}>Transfer</button>
-              <button type="button" role="tab" aria-selected={mobileTab === "chat"} className={mobileTab === "chat" ? "active" : ""} onClick={() => setMobileTab("chat")}>Chat</button>
-              <button type="button" role="tab" aria-selected={mobileTab === "logs"} className={mobileTab === "logs" ? "active" : ""} onClick={() => setMobileTab("logs")}>Logs</button>
+              <button type="button" role="tab" aria-selected={mobileTab === "connect"} className={mobileTab === "connect" ? "active" : ""} onClick={() => setMobileTab("connect")}>
+                <FaQrcode aria-hidden />
+                <span>Connect</span>
+              </button>
+              <button type="button" role="tab" aria-selected={mobileTab === "transfer"} className={mobileTab === "transfer" ? "active" : ""} onClick={() => setMobileTab("transfer")}>
+                <FaUpload aria-hidden />
+                <span>Transfer</span>
+              </button>
+              <button type="button" role="tab" aria-selected={mobileTab === "logs"} className={mobileTab === "logs" ? "active" : ""} onClick={() => setMobileTab("logs")}>
+                <FaClock aria-hidden />
+                <span>Logs</span>
+              </button>
             </div>
 
             <div className="content-grid">
-              <section className={`left-column mobile-pane ${mobileTab === "transfer" || mobileTab === "logs" ? "is-mobile-active" : ""}`}>
+              <section className={`left-column mobile-pane mobile-tab-${mobileTab} ${mobileTab === "connect" || mobileTab === "transfer" || mobileTab === "logs" ? "is-mobile-active" : ""}`}>
                 {mode === "receive" && (
-                  <div className={`card animate-in stretch-card transfer-panel mobile-pane ${mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
-                    <h2>Receive: Configure Destination</h2>
+                  <div className={`card animate-in stretch-card transfer-panel mobile-pane ${mobileTab === "connect" || mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
+                    <h2>{isMobileViewport ? (mobileTab === "connect" ? "Step 1: Connect" : "Step 2: Transfer") : "Receive: Configure Destination"}</h2>
 
                     <label
                       className="checkbox-inline"
@@ -1910,8 +1936,8 @@ export default function App() {
                 )}
 
                 {mode === "send" && (
-                  <div className={`card animate-in transfer-panel mobile-pane ${mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
-                    <h2>Send: Connect to Receiver</h2>
+                  <div className={`card animate-in transfer-panel mobile-pane ${mobileTab === "connect" || mobileTab === "transfer" ? "is-mobile-active" : ""}`}>
+                    <h2>{isMobileViewport ? (mobileTab === "connect" ? "Step 1: Connect" : "Step 2: Transfer") : "Send: Connect to Receiver"}</h2>
 
                     <label className="checkbox-inline" style={{ alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setSaveToDownloads((s) => !s)}>
                       <input type="checkbox" checked={saveToDownloads} onChange={(e) => setSaveToDownloads(e.target.checked)} style={{ marginLeft: 8 }} />
@@ -2036,7 +2062,7 @@ export default function App() {
                 </div>
               </section>
 
-              <aside className={`right-column mobile-pane ${mobileTab === "connect" || mobileTab === "chat" ? "is-mobile-active" : ""}`}>
+              <aside className={`right-column mobile-pane ${mobileTab === "connect" ? "is-mobile-active" : ""}`}>
                 <div className={`panel card animate-in connection-hero mobile-pane ${mobileTab === "connect" ? "is-mobile-active" : ""}`}>
                   {!mode && (
                     <div className="hero">
@@ -2148,6 +2174,7 @@ export default function App() {
                 </div>
 
               </aside>
+
             </div>
 
             {/* === END: original app UI === */}
@@ -2166,6 +2193,24 @@ export default function App() {
         </span>
         <span className="chat-fab-label">Chat</span>
       </button>
+
+      <nav className="mobile-bottom-nav" aria-label="Bottom navigation">
+        <button type="button" className={mobileTab === "connect" ? "active" : ""} onClick={() => setMobileTab("connect")}>
+          <FaQrcode aria-hidden />
+          <span>Connect</span>
+        </button>
+        <button type="button" className={mobileTab === "transfer" ? "active" : ""} onClick={() => setMobileTab("transfer")}>
+          <FaUpload aria-hidden />
+          <span>Transfer</span>
+        </button>
+        <button type="button" className={chatOpen ? "active" : ""} onClick={openChatMode}>
+          <span>Chat</span>
+        </button>
+        <button type="button" className={mobileTab === "logs" ? "active" : ""} onClick={() => setMobileTab("logs")}>
+          <FaClock aria-hidden />
+          <span>Logs</span>
+        </button>
+      </nav>
 
       {chatOpen && (
         <div className="chat-dialog-backdrop" onClick={closeChatMode} role="dialog" aria-modal="true" aria-label="Direct chat dialog">
