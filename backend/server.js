@@ -1,6 +1,6 @@
 // backend/server_nodb.js
-// Enhanced: supports transfers up to 5 GB with Postgres-backed ratings metadata.
-// - Uses filesystem JSON metadata for transfers and Postgres for ratings
+// Enhanced: supports transfers up to 5 GB with MongoDB-backed ratings metadata.
+// - Uses filesystem JSON metadata for transfers and MongoDB for ratings
 // - Streaming-safe chunk writes (writes incoming request buffers to file at given offset)
 // - Session and transfer metadata persisted to JSON files under uploads/ so restarts keep state
 // - Maintains original features: ephemeral sessions, pre-allocation, worker SHA, TURN creds, WebSocket signaling
@@ -22,13 +22,16 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const client = require('prom-client');
 const qrcode = require('qrcode');
+const compression = require('compression');
 const { Worker } = require('worker_threads');
-const { Pool } = require('pg');
+
+const mongoose = require('mongoose');
 
 const USE_CLUSTER = (process.env.USE_CLUSTER || 'false') === 'true';
 const NUM_CPUS = os.cpus().length;
 
-if (USE_CLUSTER && cluster.isMaster) {
+if (USE_CLUSTER && (cluster.isPrimary || cluster.isMaster)) {
+
   console.log(`Master process PID ${process.pid} - starting ${NUM_CPUS} workers`);
   for (let i = 0; i < NUM_CPUS; i++) cluster.fork();
   cluster.on('exit', (worker, code, signal) => {
@@ -69,42 +72,44 @@ const SESSIONS_DIR = path.join(UPLOADS_DIR, '_sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 const RATINGS_FALLBACK_PATH = path.join(UPLOADS_DIR, '_ratings.json');
 
-// ========== Postgres (ratings) ==========
-const DATABASE_URL = process.env.DATABASE_URL || '';
-let pgPool = null;
-if (DATABASE_URL) {
-  pgPool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: DATABASE_URL.includes('supabase.co') ? { rejectUnauthorized: false } : false,
-    max: Number(process.env.PG_POOL_MAX || 10),
-    idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
-    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
-  });
-  pgPool.on('error', (err) => {
-    console.error('Postgres pool error:', err && err.message);
-  });
+// ========== NoSQL (MongoDB - ratings) ==========
+const MONGO_URI = process.env.MONGO_URI || '';
+if (MONGO_URI) {
+  mongoose.connect(MONGO_URI)
+    .then(() => console.log('MongoDB connected for ratings'))
+    .catch(err => console.error('MongoDB connection error:', err));
 } else {
-  console.warn('DATABASE_URL not set. /rating endpoints will use local JSON fallback.');
+  console.warn('MONGO_URI not set. Ratings will use local JSON fallback.');
 }
+
+const ratingSchema = new mongoose.Schema({
+  transfer_id: { type: String, unique: true },
+  rating: Number,
+  reason_tags: [String],
+  comment: String,
+  ip_hash: String,
+  user_agent: String,
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+const Rating = mongoose.model('Rating', ratingSchema);
+
+const receiptSchema = new mongoose.Schema({
+  transfer_id: { type: String, unique: true },
+  completed_at: { type: Date, default: Date.now }
+});
+const Receipt = mongoose.model('Receipt', receiptSchema);
+
 
 // ========== Helpers ==========
 function now() { return Date.now(); }
 function makeCode() {
-  const lowers = 'abcdefghijklmnopqrstuvwxyz';
-  const uppers = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const specials = '!@#$%&*';
-  const all = `${lowers}${uppers}${specials}`;
-  const chars = [
-    lowers[Math.floor(Math.random() * lowers.length)],
-    uppers[Math.floor(Math.random() * uppers.length)],
-    specials[Math.floor(Math.random() * specials.length)],
-    all[Math.floor(Math.random() * all.length)],
-  ];
-  for (let i = chars.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [chars[i], chars[j]] = [chars[j], chars[i]];
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ$';
+  let res = '';
+  for (let i = 0; i < 4; i++) {
+    res += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
-  return chars.join('');
+  return res;
 }
 function makeToken() { return crypto.randomBytes(20).toString('hex'); }
 function makeSessionId() { return crypto.randomBytes(16).toString('hex'); }
@@ -128,31 +133,31 @@ function hashIp(ip) {
 }
 
 async function fetchRatingStats() {
-  if (!pgPool) {
+  if (mongoose.connection.readyState !== 1) {
     const rows = readLocalRatings();
     if (!rows.length) return { avg: null, count: 0 };
     const total = rows.reduce((acc, r) => acc + Number(r.rating || 0), 0);
     return { avg: total / rows.length, count: rows.length };
   }
   try {
-    const fromView = await pgPool.query('SELECT total_ratings, avg_rating FROM public.rating_stats LIMIT 1');
-    if (fromView.rows.length > 0) {
-      const row = fromView.rows[0];
+    const stats = await Rating.aggregate([
+      {
+        $group: {
+          _id: null,
+          avg_rating: { $avg: '$rating' },
+          total_ratings: { $sum: 1 }
+        }
+      }
+    ]);
+    if (stats.length > 0) {
       return {
-        avg: row.avg_rating != null ? Number(row.avg_rating) : null,
-        count: row.total_ratings != null ? Number(row.total_ratings) : 0,
+        avg: stats[0].avg_rating != null ? Number(stats[0].avg_rating) : null,
+        count: stats[0].total_ratings || 0,
       };
     }
+    return { avg: null, count: 0 };
   } catch (e) {
-    // If view is unavailable, fallback to direct aggregate below.
-  }
-
-  try {
-    const agg = await pgPool.query('SELECT COUNT(*)::int AS count, AVG(rating)::numeric AS avg FROM public.ratings');
-    const row = agg.rows[0] || { count: 0, avg: null };
-    return { avg: row.avg != null ? Number(row.avg) : null, count: Number(row.count || 0) };
-  } catch (e) {
-    console.warn('Rating stats DB query failed, using local fallback:', e && e.message);
+    console.warn('MongoDB stats aggregate failed, using local fallback:', e && e.message);
     const rows = readLocalRatings();
     if (!rows.length) return { avg: null, count: 0 };
     const total = rows.reduce((acc, r) => acc + Number(r.rating || 0), 0);
@@ -160,10 +165,22 @@ async function fetchRatingStats() {
   }
 }
 
+
 function readJsonSafe(p) {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+  try {
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch { return null; }
+}
+async function writeJsonSafeAsync(p, obj) {
+  try {
+    await fs.promises.mkdir(path.dirname(p), { recursive: true });
+    await fs.promises.writeFile(p, JSON.stringify(obj));
+    return true;
+  } catch (e) { return false; }
 }
 function writeJsonSafe(p, obj) {
+
   try { fs.writeFileSync(p, JSON.stringify(obj)); return true; } catch (e) { return false; }
 }
 
@@ -234,15 +251,21 @@ function loadTransferMeta(token, transferId) {
   const p = transferMetaPath(token, transferId);
   return readJsonSafe(p);
 }
+async function saveTransferMetaAsync(token, transferId, meta) {
+  const p = transferMetaPath(token, transferId);
+  return await writeJsonSafeAsync(p, meta);
+}
 function saveTransferMeta(token, transferId, meta) {
+
   const p = transferMetaPath(token, transferId);
   return writeJsonSafe(p, meta);
 }
 
 function sessionPath(sessionId) { return path.join(SESSIONS_DIR, `${sessionId}.json`); }
-function saveSession(sess) { return writeJsonSafe(sessionPath(sess.sessionId), sess); }
+async function saveSession(sess) { return await writeJsonSafeAsync(sessionPath(sess.sessionId), sess); }
 function loadSession(sessionId) { return readJsonSafe(sessionPath(sessionId)); }
-function deleteSession(sessionId) { try { fs.unlinkSync(sessionPath(sessionId)); } catch (e) {} }
+async function deleteSession(sessionId) { try { await fs.promises.unlink(sessionPath(sessionId)); } catch (e) {} }
+
 
 // ========== Metrics ==========
 const register = client.register;
@@ -263,7 +286,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+app.use(compression());
 app.use(cors({
+
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
@@ -314,34 +339,34 @@ app.post('/rating', express.json({ limit: '1mb' }), async (req, res) => {
     const commentInput = req.body?.comment == null ? null : String(req.body.comment).trim();
     const comment = commentInput && commentInput.length ? commentInput.slice(0, 500) : null;
 
-    if (pgPool) {
+    if (mongoose.connection.readyState === 1) {
       try {
-        await pgPool.query(
-          `INSERT INTO public.transfer_receipts (transfer_id, completed_at)
-           VALUES ($1, NOW())
-           ON CONFLICT (transfer_id) DO NOTHING`,
-          [transferId]
+        await Receipt.findOneAndUpdate(
+          { transfer_id: transferId },
+          { completed_at: new Date() },
+          { upsert: true }
         );
 
-        await pgPool.query(
-          `INSERT INTO public.ratings (transfer_id, rating, reason_tags, comment, ip_hash, user_agent)
-           VALUES ($1, $2, $3::text[], $4, $5, $6)
-           ON CONFLICT (transfer_id)
-           DO UPDATE SET
-             rating = EXCLUDED.rating,
-             reason_tags = EXCLUDED.reason_tags,
-             comment = EXCLUDED.comment,
-             ip_hash = EXCLUDED.ip_hash,
-             user_agent = EXCLUDED.user_agent`,
-          [transferId, value, reasonTags, comment, ipHash, ua]
+        await Rating.findOneAndUpdate(
+          { transfer_id: transferId },
+          {
+            rating: value,
+            reason_tags: reasonTags,
+            comment,
+            ip_hash: ipHash,
+            user_agent: ua,
+            updated_at: new Date()
+          },
+          { upsert: true }
         );
       } catch (e) {
-        console.warn('Rating write DB query failed, using local fallback:', e && e.message);
+        console.warn('MongoDB write failed, using local fallback:', e && e.message);
         upsertLocalRating({ transferId, value, reasonTags, comment, ipHash, ua });
       }
     } else {
       upsertLocalRating({ transferId, value, reasonTags, comment, ipHash, ua });
     }
+
 
     const stats = await fetchRatingStats();
     return res.json({ ok: true, ...stats });
@@ -422,12 +447,12 @@ app.post('/upload/start', express.json({ limit: '2mb' }), async (req, res) => {
     const tmpPath = path.join(tokenDir, `transfer-${transferId}.tmp`);
 
     // persist session to FS
-    const sess = { sessionId, token, transferId, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: parsedSize, createdAt, expiresAt };
-    saveSession(sess);
+    await saveSession(sess);
 
     // persist transfer meta
     const meta = { id: transferId, token, filename: sanitizeFilename(filename || `upload-${transferId}`), totalSize: parsedSize, received: 0, status: 'started', sha256: null, created_at: createdAt, updated_at: createdAt };
-    saveTransferMeta(token, transferId, meta);
+    await saveTransferMetaAsync(token, transferId, meta);
+
 
     if (Number(totalSize) > 0) {
       try {
@@ -499,7 +524,8 @@ app.post('/upload/chunk', async (req, res) => {
     const meta = loadTransferMeta(token, transferId) || { id: transferId, received: 0 };
     meta.received = (meta.received || 0) + totalBytes;
     meta.updated_at = now();
-    saveTransferMeta(token, transferId, meta);
+    await saveTransferMetaAsync(token, transferId, meta);
+
 
     uploadsReceivedBytes.inc(totalBytes);
 
@@ -590,7 +616,7 @@ app.post('/upload/complete', express.json({ limit: '2mb' }), async (req, res) =>
       }
     }
 
-    deleteSession(sessionId);
+    await deleteSession(sessionId);
     uploadsCompleted.inc();
 
     const hostWs = hostsByToken.get(token);
@@ -599,6 +625,7 @@ app.post('/upload/complete', express.json({ limit: '2mb' }), async (req, res) =>
     }
 
     return res.json({ ok: true, transferId, finalName, size: stat.size, sha256: computed });
+
   } catch (err) {
     console.error('upload/complete error', err);
     return res.status(500).json({ error: 'Could not finalize file' });
@@ -617,11 +644,21 @@ app.get('/turn/credentials', (req, res) => {
 
 // ========== WebSocket signaling ==========
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true, path: '/ws', maxPayload: Number(process.env.WS_MAX_PAYLOAD_BYTES || 200 * 1024 * 1024), perMessageDeflate: false });
+const wss = new WebSocketServer({
+  noServer: true,
+  path: '/ws',
+  // 256 MB max frame — well above our 16 MB chunk size, giving plenty of headroom.
+  maxPayload: Number(process.env.WS_MAX_PAYLOAD_BYTES || 256 * 1024 * 1024),
+  // Never compress binary frames — compression of already-compressed data
+  // wastes CPU and can actually SLOW transfers down.
+  perMessageDeflate: false,
+});
+
 
 wss.on('connection', (ws, req) => {
   try { ws._socket.setNoDelay(true); ws._socket.setKeepAlive(true, 60000); } catch (e) {}
-  ws._meta = { role: null, token: null, currentTransferId: null, lastActive: now(), stream: null };
+  ws._meta = { role: null, token: null, currentTransferId: null, lastActive: now(), stream: null, hash: null };
+
 
   ws.on('pong', () => ws._meta.lastActive = now());
 
@@ -655,15 +692,21 @@ wss.on('connection', (ws, req) => {
         try { host.send(data, { binary: true }); } catch (e) {}
       } else {
         if (ws._meta.stream) {
+          if (ws._meta.hash) ws._meta.hash.update(data);
           const ok = ws._meta.stream.write(data);
-          if (!ok) ws.send(JSON.stringify({ type: 'backpressure' }));
-          else ws.send(JSON.stringify({ type: 'ack-chunk', bytes: data.length }));
+          if (!ok) {
+            // Wait for drain event if needed? For now just signal backpressure.
+            ws.send(JSON.stringify({ type: 'backpressure', state: 'high' }));
+          } else {
+            ws.send(JSON.stringify({ type: 'ack-chunk', bytes: data.length }));
+          }
         } else {
           console.log('binary frame but no stream/host for token', token);
         }
       }
       return;
     }
+
 
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return ws.send(JSON.stringify({ type: 'error', message: 'invalid json' })); }
@@ -721,9 +764,18 @@ wss.on('connection', (ws, req) => {
         if (!fs.existsSync(tokenDir)) fs.mkdirSync(tokenDir, { recursive: true });
         const outPath = path.join(tokenDir, transferMeta.filename);
         try {
-          const stream = fs.createWriteStream(outPath, { flags: 'w', highWaterMark: 4 * 1024 * 1024 });
+          // highWaterMark matches chunk size so the OS page-cache can absorb
+          // exactly one chunk before back-pressure is triggered.
+          const stream = fs.createWriteStream(outPath, { flags: 'w', highWaterMark: 16 * 1024 * 1024 });
           ws._meta.stream = stream;
+          ws._meta.hash = crypto.createHash('sha256');
+          stream.on('drain', () => {
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'backpressure', state: 'low' }));
+          });
         } catch (e) { console.warn('create stream failed', e); }
+
+
+
       }
       ws.send(JSON.stringify({ type: 'offset', offset: 0, transferId }));
       return;
@@ -807,11 +859,27 @@ wss.on('connection', (ws, req) => {
       if (!token || !transferId) return ws.send(JSON.stringify({ type: 'error', message: 'missing context' }));
       const hostWs = hostsByToken.get(token);
       if (hostWs && hostWs.readyState === hostWs.OPEN) hostWs.send(JSON.stringify({ type: 'complete', transferId, filename: msg.filename || null }));
-      if (ws._meta.stream) { try { await new Promise(r => ws._meta.stream.end(() => r())); ws._meta.stream = null; } catch (e) {} }
+      if (ws._meta.stream) {
+        try {
+          await new Promise(r => ws._meta.stream.end(() => r()));
+          ws._meta.stream = null;
+          if (ws._meta.hash) {
+            const finalSha = ws._meta.hash.digest('hex');
+            const tokenDir = path.join(UPLOADS_DIR, token);
+            const meta = loadTransferMeta(token, transferId) || {};
+            meta.status = 'completed';
+            meta.sha256 = finalSha;
+            meta.completed_at = now();
+            await saveTransferMetaAsync(token, transferId, meta);
+            ws._meta.hash = null;
+          }
+        } catch (e) {}
+      }
       const tmap = transfersCache.get(token); if (tmap && tmap.has(transferId)) tmap.get(transferId).completedAt = now();
       ws.send(JSON.stringify({ type: 'complete', transferId }));
       return;
     }
+
 
     ws.send(JSON.stringify({ type: 'error', message: 'unknown type' }));
   });

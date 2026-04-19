@@ -968,7 +968,7 @@ main.main-content {
   background: rgba(5, 14, 10, 0.48);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  z-index: 1300;
+  z-index: 1500;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -986,9 +986,6 @@ main.main-content {
 }
 
 @media (max-width: 768px) {
-  .chat-dialog-backdrop {
-    display: none !important;
-  }
 
   .chat-head,
   .chat-meta-row {
@@ -1517,6 +1514,16 @@ body,
 
   .right-column {
     grid-template-columns: 1fr;
+  }
+
+  .transfer-panel.mobile-pane.is-mobile-active,
+  .connection-hero.mobile-pane.is-mobile-active {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100%;
+    min-height: 100%;
   }
 
   .chat-card {

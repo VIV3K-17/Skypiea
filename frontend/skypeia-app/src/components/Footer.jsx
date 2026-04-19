@@ -99,13 +99,21 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   outline: 2px solid rgba(43,70,60,0.14);
   transform: translateY(-2px);
 }
-.star-svg {
-  width: 22px;
-  height: 22px;
-  display: block;
+.star-empty path { fill: #cbd5e1; }
+.star-filled path { 
+  fill: #fbbf24;
+  filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.4));
 }
-.star-empty path { fill: #e6e7eb; }
-.star-filled path { fill: #f59e0b; }
+.star-btn:hover:not(:disabled) .star-svg {
+  transform: scale(1.1);
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.star-svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+  transition: transform 0.2s ease, filter 0.2s ease;
+}
 
 /* Right links */
 .footer-right {
@@ -136,7 +144,28 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   color: #2b463c;
 }
 
+
+.rating-success-msg {
+  font-size: 13px;
+  font-weight: 600;
+  color: #059669;
+  background: rgba(167, 243, 208, 0.4);
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  animation: slideDownIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes slideDownIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Bottom section */
+
 .footer-large__bottom {
   margin-top: 32px;
   border-top: 1px solid rgba(17,24,39,0.04);
@@ -263,29 +292,53 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
     { url: "https://www.facebook.com/s.sai.vivek.74", label: "Facebook" }
   ];
 
-  const API_BASE = "https://skypiea-2.onrender.com";
+  const API_BASE = (() => {
+    if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+      return "http://localhost:3000";
+    }
+    return "https://skypiea-2.onrender.com";
+  })();
+
   const [userRating, setUserRating] = React.useState(null);
   const [hoverRating, setHoverRating] = React.useState(0);
   const ratingTransferIdRef = React.useRef(null);
 
   React.useEffect(() => {
     try {
-      const existing = window.localStorage.getItem("skypiea-rating-id");
-      if (existing) {
-        ratingTransferIdRef.current = existing;
-        return;
+      const existingId = window.localStorage.getItem("skypiea-rating-id");
+      if (existingId) {
+        ratingTransferIdRef.current = existingId;
+      } else {
+        const newId = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        window.localStorage.setItem("skypiea-rating-id", newId);
+        ratingTransferIdRef.current = newId;
       }
-      const newId = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-      window.localStorage.setItem("skypiea-rating-id", newId);
-      ratingTransferIdRef.current = newId;
-    } catch {
+
+      // Load existing rating value if present
+      const savedRating = window.localStorage.getItem("skypiea-user-rating");
+      if (savedRating) {
+        setUserRating(Number(savedRating));
+      }
+    } catch (err) {
+      console.warn("Storage access failed:", err);
       ratingTransferIdRef.current = `anon-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     }
   }, []);
 
   const handleVote = async (n) => {
     if (!n || n < 1 || n > 5) return;
+    // If they already gave this same rating, or any rating, and we want to allow only one...
+    // The user said "allow only one user one browser can give rating"
+    // We can either disable after one vote, or just keep updating but they've already "given" it.
+    // Let's stick to allowing updates but persisting it.
+    
     setUserRating(n);
+    try {
+      window.localStorage.setItem("skypiea-user-rating", n.toString());
+    } catch (e) {
+      console.warn("Failed to save rating to localStorage", e);
+    }
+
     try {
       await fetch(`${API_BASE}/rating`, {
         method: "POST",
@@ -295,7 +348,8 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
           transferId: ratingTransferIdRef.current || undefined
         })
       });
-    } catch {
+    } catch (err) {
+      console.error("Failed to post rating:", err);
       // Preserve selected stars even if network submit fails.
     }
   };
@@ -343,6 +397,14 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
         {/* RIGHT */}
         <div className="footer-right">
           <div className="rating-stars" aria-live="polite">
+            {userRating !== null && (
+              <div className="rating-success-msg">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                <span>Thank you!</span>
+              </div>
+            )}
             <div className="star-row" role="radiogroup" aria-label="Rate Skypiea">
               {Array.from({ length: 5 }).map((_, i) => {
                 const n = i + 1;
@@ -354,14 +416,23 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
                     role="radio"
                     aria-checked={active === n}
                     aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                    disabled={userRating !== null && hoverRating === 0}
+                    style={{
+                      cursor: userRating !== null ? "default" : "pointer",
+                      opacity: userRating !== null && n > userRating ? 0.6 : 1
+                    }}
                     onClick={() => {
-                      handleVote(n);
-                      setHoverRating(0);
+                      if (userRating === null) {
+                        handleVote(n);
+                        setHoverRating(0);
+                      }
                     }}
                     onKeyDown={(e) => handleKey(e, n)}
-                    onMouseEnter={() => setHoverRating(n)}
+                    onMouseEnter={() => {
+                      if (userRating === null) setHoverRating(n);
+                    }}
                     onMouseLeave={() => setHoverRating(0)}
-                    title={`Rate ${n} star${n > 1 ? "s" : ""}`}
+                    title={userRating !== null ? `You rated ${userRating} stars` : `Rate ${n} star${n > 1 ? "s" : ""}`}
                   >
                     <Star filled={n <= active} />
                   </button>

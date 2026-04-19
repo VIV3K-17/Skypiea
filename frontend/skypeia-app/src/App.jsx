@@ -1,4 +1,4 @@
-﻿﻿// App.jsx — merged version with in-file ConnectedPanel and full app logic
+// App.jsx — merged version with in-file ConnectedPanel and full app logic
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import "./App.css";
@@ -31,8 +31,15 @@ const API_BASE = (() => {
 const WS_SCHEME = API_BASE.startsWith("https://") ? "wss" : "ws";
 const WS_BASE = `${WS_SCHEME}://${new URL(API_BASE).host}`;
 const MAX_TRANSFER_BYTES = 5 * 1024 * 1024 * 1024;
-const WS_CHUNK_BYTES = 4 * 1024 * 1024;
-const WS_BUFFER_HIGH_WATER = 16 * 1024 * 1024;
+// ── Throughput tuning ──────────────────────────────────────────
+// 16 MB chunks: fewer per-message overhead frames to hit ~10 MB/s
+const WS_CHUNK_BYTES = 16 * 1024 * 1024;
+// Allow up to 64 MB in the WS send buffer before throttling;
+// giving the OS TCP stack enough runway to fill its own buffers.
+const WS_BUFFER_HIGH_WATER = 64 * 1024 * 1024;
+// How far ahead to read the next chunk (pipeline depth = 1)
+const READ_AHEAD = true;
+// ────────────────────────────────────────────────────────────────
 const CHAT_MAX_LINES = 1000;
 const CHAT_MODE = { FEATHER: "feather", BOULDER: "boulder" };
 const CHAT_MODE_STORAGE_KEY = "skypiea_chat_mode";
@@ -549,7 +556,7 @@ function ScannerModal({ open, onClose, onDetected }) {
 }
 
 export default function App() {
-  
+
   React.useEffect(() => {
     if (!document.getElementById("connected-panel-styles")) {
       const s = document.createElement("style");
@@ -1018,7 +1025,7 @@ export default function App() {
       const generatedAt = Date.now();
       setConnection({ ...j.connectionData, qrDataUrl: j.qrDataUrl, generatedAt, persona });
       logMsg("Receive ready. Code:", j.connectionData.code);
-      
+
       // Start 5-minute countdown timer
       setTimeRemaining(300); // 5 minutes in seconds
       const countdownInterval = setInterval(() => {
@@ -1030,14 +1037,14 @@ export default function App() {
           return prev - 1;
         });
       }, 1000);
-      
+
       // Set 5-minute timeout to abort connection
       connectionTimeoutRef.current = setTimeout(() => {
         clearInterval(countdownInterval);
         setTimeRemaining(null);
         setConnection(null);
         setProgress("");
-        
+
         // Close websocket if open
         if (hostWsRef.current && hostWsRef.current.readyState === WebSocket.OPEN) {
           try {
@@ -1047,7 +1054,7 @@ export default function App() {
           }
           hostWsRef.current = null;
         }
-        
+
         logMsg("Connection expired after 5 minutes");
         setError("Connection code expired after 5 minutes. Please generate a new code.");
       }, 5 * 60 * 1000); // 5 minutes
@@ -1090,7 +1097,7 @@ export default function App() {
                 }
                 setTimeRemaining(null);
                 hostTransferIdRef.current = m.transferId || null;
-                
+
                 hostChunksRef.current.chunks = [];
                 hostChunksRef.current.received = 0;
                 hostChunksRef.current.total = m.totalSize || 0;
@@ -1187,9 +1194,9 @@ export default function App() {
       if (!res.ok) {
         if (res.status === 404) {
           // Check if code format looks correct
-          const codePattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%&*])[A-Za-z!@#$%&*]{4}$/;
+          const codePattern = /^[A-Z$]{4}$/;
           if (!codePattern.test(trimmedCode)) {
-            throw new Error(`Invalid code format. Use 4 characters with lower + upper + special (example: aB#x).`);
+            throw new Error(`Invalid code format. Use 4 uppercase letters or $ (example: ABC$).`);
           } else {
             throw new Error(`Code "${trimmedCode}" not found. Please check if:\n• The code was typed correctly\n• The receiver is still online\n• The code hasn't expired (5-minute limit)`);
           }
@@ -1259,6 +1266,11 @@ export default function App() {
           } else if (msg.type === "offset") {
             const chunkSize = WS_CHUNK_BYTES;
             let pos = msg.offset || 0;
+            // Pre-read the first chunk immediately so it's in memory before the loop.
+            let nextChunkPromise = READ_AHEAD && pos < file.size
+              ? file.slice(pos, Math.min(pos + chunkSize, file.size)).arrayBuffer()
+              : null;
+            let lastProgressPct = -1;
             try {
               while (pos < file.size) {
                 if (stoppedRef.current) break;
@@ -1270,24 +1282,51 @@ export default function App() {
                   setIsPaused(false);
                   resumeResolveRef.current = null;
                 }
-                const slice = file.slice(pos, Math.min(pos + chunkSize, file.size));
-                const chunk = await slice.arrayBuffer();
-                if (ws.readyState !== WebSocket.OPEN) throw new Error("Connection lost");
-                while (ws.bufferedAmount > WS_BUFFER_HIGH_WATER) {
-                  await new Promise((r) => setTimeout(r, 8));
+                if (ws._isBackpressurePaused) {
+                  await new Promise((resolve) => {
+                    ws._backpressureResolve = resolve;
+                  });
                 }
+
+                // Await the pre-read chunk (already started last iteration).
+                const chunk = nextChunkPromise
+                  ? await nextChunkPromise
+                  : await file.slice(pos, Math.min(pos + chunkSize, file.size)).arrayBuffer();
+
+                if (ws.readyState !== WebSocket.OPEN) throw new Error("Connection lost");
+
+                // Throttle write: spin at 2 ms intervals (tight loop is accurate enough)
+                while (ws.bufferedAmount > WS_BUFFER_HIGH_WATER) {
+                  await new Promise((r) => setTimeout(r, 2));
+                }
+
                 ws.send(chunk);
                 pos += chunk.byteLength;
                 bytesSentRef.current += chunk.byteLength;
+
+                // ── Pipeline: kick off reading the NEXT chunk immediately,
+                //    while the OS is sending the current one over the wire. ──
+                const nextPos = pos;
+                nextChunkPromise = READ_AHEAD && nextPos < file.size
+                  ? file.slice(nextPos, Math.min(nextPos + chunkSize, file.size)).arrayBuffer()
+                  : null;
+
+                // ── Speed meter (rolling 500 ms window) ──
                 const nowAt = performance.now();
                 const windowMs = nowAt - speedWindowRef.current.at;
                 speedWindowRef.current.bytes += chunk.byteLength;
-                if (windowMs >= 350) {
+                if (windowMs >= 500) {
                   const bps = speedWindowRef.current.bytes / (windowMs / 1000);
                   setSpeedText(`${formatBytes(bps)}/s`);
                   speedWindowRef.current = { at: nowAt, bytes: 0 };
                 }
-                setProgress(`${Math.round((pos / file.size) * 100)}%`);
+
+                // ── Progress (only update every 0.5% to reduce React re-renders) ──
+                const pct = Math.round((pos / file.size) * 100);
+                if (pct !== lastProgressPct) {
+                  lastProgressPct = pct;
+                  setProgress(`${pct}%`);
+                }
               }
               if (!stoppedRef.current) {
                 ws.send(JSON.stringify({ type: "done" }));
@@ -1352,7 +1391,20 @@ export default function App() {
               appendSystemChatMessage("Transfer stopped");
               ws.close();
             }
+          } else if (msg.type === "backpressure") {
+            if (msg.state === "high") {
+              // Server is overwhelmed, pause sending
+              ws._isBackpressurePaused = true;
+            } else if (msg.state === "low") {
+              // Server is ready, resume sending
+              ws._isBackpressurePaused = false;
+              if (ws._backpressureResolve) {
+                ws._backpressureResolve();
+                ws._backpressureResolve = null;
+              }
+            }
           } else if (msg.type === "error") {
+
             throw new Error(msg.message);
           }
         }
@@ -1413,7 +1465,7 @@ export default function App() {
       } catch (e) {
         console.error("Error closing senderChatWsRef on unmount:", e);
       }
-      
+
       // Clear connection timeout
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
@@ -1688,7 +1740,7 @@ export default function App() {
     setProgress("");
     setTimeRemaining(null);
     setSpeedText("");
-    
+
     // Clear any active timeout
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
@@ -1958,7 +2010,7 @@ export default function App() {
                       <>
                         <label>Enter Receiver Code</label>
                         <div className="resolve-row">
-                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="aB#x" />
+                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="ABC$" onKeyDown={(e) => e.key === "Enter" && !isLoading && codeInput.trim() && resolveCode()} />
                           <button className="primary" onClick={() => resolveCode()} disabled={isLoading || !codeInput.trim()}>
                             {isLoading ? "Resolving..." : "Resolve"}
                           </button>
@@ -2195,18 +2247,18 @@ export default function App() {
       </button>
 
       <nav className="mobile-bottom-nav" aria-label="Bottom navigation">
-        <button type="button" className={mobileTab === "connect" ? "active" : ""} onClick={() => setMobileTab("connect")}>
+        <button type="button" className={mobileTab === "connect" && !chatOpen ? "active" : ""} onClick={() => { setMobileTab("connect"); closeChatMode(); }}>
           <FaQrcode aria-hidden />
           <span>Connect</span>
         </button>
-        <button type="button" className={mobileTab === "transfer" ? "active" : ""} onClick={() => setMobileTab("transfer")}>
+        <button type="button" className={mobileTab === "transfer" && !chatOpen ? "active" : ""} onClick={() => { setMobileTab("transfer"); closeChatMode(); }}>
           <FaUpload aria-hidden />
           <span>Transfer</span>
         </button>
         <button type="button" className={chatOpen ? "active" : ""} onClick={openChatMode}>
           <span>Chat</span>
         </button>
-        <button type="button" className={mobileTab === "logs" ? "active" : ""} onClick={() => setMobileTab("logs")}>
+        <button type="button" className={mobileTab === "logs" && !chatOpen ? "active" : ""} onClick={() => { setMobileTab("logs"); closeChatMode(); }}>
           <FaClock aria-hidden />
           <span>Logs</span>
         </button>
@@ -2261,8 +2313,8 @@ export default function App() {
       <ConfirmModal open={confirmOpen} title={confirmPayload.title} body={confirmPayload.body} onCancel={confirmPayload.onCancel} onConfirm={() => { confirmPayload.onConfirm && confirmPayload.onConfirm(); }} />
 
       {/* Confetti blast animation for successful transmissions (desktop only) */}
-      <ConfettiBlast 
-        show={showConfetti} 
+      <ConfettiBlast
+        show={showConfetti}
         onComplete={() => setShowConfetti(false)}
         duration={3000}
       />
@@ -2278,9 +2330,9 @@ export default function App() {
         <Route path="/support" element={<Support />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/contact" element={<Contact />} />
-        
+
         <Route path="*" element={mainApp} />
-        
+
       </Routes>
     </BrowserRouter>
   );
