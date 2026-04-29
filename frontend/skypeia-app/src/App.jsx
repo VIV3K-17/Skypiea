@@ -23,9 +23,10 @@ import ConfettiBlast from "./components/ConfettiBlast";
   Changed to localhost as requested.
 */
 const API_BASE = (() => {
-  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-    return "http://localhost:3000";
-  }
+  if (typeof window === "undefined") return "https://skypiea-2.onrender.com";
+  const { hostname, protocol } = window.location;
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1" || hostname.startsWith("192.168.") || hostname.startsWith("10.");
+  if (isLocal) return `${protocol}//${hostname}:3000`;
   return "https://skypiea-2.onrender.com";
 })();
 const WS_SCHEME = API_BASE.startsWith("https://") ? "wss" : "ws";
@@ -149,8 +150,14 @@ function ConnectedPanel(props) {
 
   const hasIpOrPort = Boolean(ip || port);
 
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !disabled && !isTransmitting && file) {
+      onStart && onStart();
+    }
+  };
+
   return (
-    <div className="connection-box connected-panel" style={{ marginTop: 12 }}>
+    <div className="connection-box connected-panel" style={{ marginTop: 12 }} onKeyDown={handleKeyDown} tabIndex={0}>
       <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span className="muted" style={{ fontSize: 13 }}>
@@ -2010,7 +2017,13 @@ export default function App() {
                       <>
                         <label>Enter Receiver Code</label>
                         <div className="resolve-row">
-                          <input type="text" value={codeInput} onChange={(e) => { setCodeInput(e.target.value); setError(null); }} placeholder="ABC$" onKeyDown={(e) => e.key === "Enter" && !isLoading && codeInput.trim() && resolveCode()} />
+                          <input 
+                            type="text" 
+                            value={codeInput} 
+                            onChange={(e) => { setCodeInput(e.target.value); setError(null); }} 
+                            onKeyDown={(e) => e.key === "Enter" && !isLoading && codeInput.trim() && resolveCode()}
+                            placeholder="ABC$" 
+                          />
                           <button className="primary" onClick={() => resolveCode()} disabled={isLoading || !codeInput.trim()}>
                             {isLoading ? "Resolving..." : "Resolve"}
                           </button>

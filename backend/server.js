@@ -49,10 +49,22 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const ALLOWED_ORIGINS = [
+  process.env.FRONTEND_URL,
+  process.env.BACKEND_URL,
   'https://skypiea-2.onrender.com',
   'https://skypieaaa.onrender.com',
-  'http://localhost:5173'
-];
+  'http://localhost:5173',
+  'http://localhost:3000'
+].filter(Boolean);
+// Helper to check if an origin is a local network IP
+const isLocalOrigin = (origin) => {
+  if (!origin) return false;
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.');
+  } catch { return false; }
+};
+
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS || 300000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1200000);
 const CHUNK_LIMIT_BYTES = Number(process.env.CHUNK_LIMIT_BYTES || 500 * 1024 * 1024);
@@ -291,9 +303,10 @@ app.use(cors({
 
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || isLocalOrigin(origin)) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
+
   credentials: true
 }));
 // small JSON bodies still allowed

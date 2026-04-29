@@ -293,9 +293,10 @@ export default function FooterLarge({ year = new Date().getFullYear() }) {
   ];
 
   const API_BASE = (() => {
-    if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-      return "http://localhost:3000";
-    }
+    if (typeof window === "undefined") return "https://skypiea-2.onrender.com";
+    const { hostname, protocol } = window.location;
+    const isLocal = hostname === "localhost" || hostname === "127.0.0.1" || hostname.startsWith("192.168.") || hostname.startsWith("10.");
+    if (isLocal) return `${protocol}//${hostname}:3000`;
     return "https://skypiea-2.onrender.com";
   })();
 
